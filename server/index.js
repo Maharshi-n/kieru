@@ -1,5 +1,8 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
@@ -209,6 +212,16 @@ app.post('/presence/clear', express.text({ type: 'text/*' }), wrap(async (req, r
 
 function safeJson(s) {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
+}
+
+// serve the built frontend. api routes are all declared above, so anything that
+// reaches here is a page request and gets index.html.
+const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+if (fs.existsSync(dist)) {
+  app.use(express.static(dist));
+  app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+} else {
+  console.warn('[warn] no dist/ folder — run npm run build');
 }
 
 store.init().then(
