@@ -102,7 +102,11 @@ function auth(req, res, next) {
 }
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
-  console.error(e);
+  console.error(`[500] ${req.method} ${req.path}:`, e.code || '', e.sqlMessage || e.message);
+  // missing tables is the usual first-deploy failure, so say so plainly
+  if (e.code === 'ER_NO_SUCH_TABLE') {
+    return res.status(500).json({ error: 'database not set up — run node server/setup-db.js' });
+  }
   res.status(500).json({ error: 'server error' });
 });
 
@@ -125,9 +129,9 @@ app.post('/auth/google', limit('auth', 30, 10 * 60 * 1000, true), wrap(async (re
   }
   const user = await store.upsertUser({
     sub: payload.sub,
-    name: payload.name || payload.email || 'User',
-    email: payload.email,
-    avatar: payload.picture,
+    name: (payload.name || payload.email || 'User').slice(0, 100),
+    email: payload.email?.slice(0, 190) ?? null,
+    avatar: payload.picture?.slice(0, 1000) ?? null,
   });
   res.json({ token: sign(user), user: publicUser(user) });
 }));

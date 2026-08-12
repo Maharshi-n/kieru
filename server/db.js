@@ -35,7 +35,7 @@ const SCHEMA = [
     google_sub VARCHAR(64) NOT NULL,
     display_name VARCHAR(100) NOT NULL,
     email VARCHAR(190),
-    avatar_url VARCHAR(500),
+    avatar_url VARCHAR(1000),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_sub (google_sub),
     KEY idx_email (email),
