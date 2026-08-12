@@ -78,24 +78,50 @@ function aboutBox() {
 }
 
 function loadGoogle(clientId, target, onDone) {
+  const busy = h('div', { class: 'gsi-busy' }, h('div', { class: 'spinner' }), 'Signing in…');
+
   const s = document.createElement('script');
   s.src = 'https://accounts.google.com/gsi/client';
   s.async = true;
+
+  s.onerror = () => {
+    clear(target).append(h('div', { class: 'gsi-fail' }, 'Could not load Google sign-in. Check your connection and reload.'));
+  };
+
   s.onload = () => {
+    if (!window.google?.accounts?.id) return s.onerror();
+
     google.accounts.id.initialize({
       client_id: clientId,
       callback: async ({ credential }) => {
+        // swap the button for a spinner, the round trip is otherwise silent and
+        // the page looks frozen after you pick an account
+        clear(target).append(busy);
         try {
           const { token, user } = await api.post('/auth/google', { credential });
           api.setToken(token);
           onDone(user);
-        } catch (e) { toast(e.message, 'err'); }
+        } catch (e) {
+          clear(target);
+          google.accounts.id.renderButton(target, GSI_BUTTON);
+          toast(e.message || 'Sign-in failed', 'err');
+        }
       },
     });
-    google.accounts.id.renderButton(target, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with' });
+
+    google.accounts.id.renderButton(target, GSI_BUTTON);
   };
+
   document.head.append(s);
 }
+
+const GSI_BUTTON = {
+  theme: 'filled_black',
+  size: 'large',
+  shape: 'pill',
+  text: 'continue_with',
+  width: 288,
+};
 
 export function friendsView({ friends, pending, onStart, onRefresh, onLogout }) {
   const wrap = h('div', { class: 'friends' });

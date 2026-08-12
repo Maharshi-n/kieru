@@ -60,7 +60,12 @@ async function enterApp() {
   try {
     state.peerId = await initPeer();
   } catch (e) {
-    toast('Could not reach the signaling server. Reload to retry.', 'err');
+    console.error('peer init failed', e);
+    renderShell(h('div', { class: 'friends-wrap' },
+      h('div', { class: 'friends' },
+        h('div', { class: 'empty' },
+          h('div', { style: { marginBottom: '10px' } }, 'Could not reach the signaling server.'),
+          h('button', { class: 'btn', onClick: () => location.reload() }, 'Try again')))));
     return;
   }
 
