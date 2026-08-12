@@ -1,9 +1,18 @@
 import { defineConfig } from 'vite';
-import basicSsl from '@vitejs/plugin-basic-ssl';
 
-// https is not optional here: getUserMedia (voice) is blocked on a plain-http lan ip
-export default defineConfig({
-  plugins: [basicSsl()],
+// basic-ssl is a dev dependency and isn't installed on the server, so only load it
+// when actually serving. https matters locally because getUserMedia needs it on a lan ip.
+const ssl = async () => {
+  try {
+    const { default: basicSsl } = await import('@vitejs/plugin-basic-ssl');
+    return [basicSsl()];
+  } catch {
+    return [];
+  }
+};
+
+export default defineConfig(async ({ command }) => ({
+  plugins: command === 'serve' ? await ssl() : [],
   build: { outDir: 'dist' },
   server: {
     host: true,
@@ -13,4 +22,4 @@ export default defineConfig({
       '/api': { target: 'http://localhost:3001', changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, '') },
     },
   },
-});
+}));

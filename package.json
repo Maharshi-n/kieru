@@ -16,13 +16,13 @@
     "express": "^4.19.2",
     "google-auth-library": "^9.14.0",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.11.0"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-basic-ssl": "^1.2.0",
-    "concurrently": "^9.0.1",
+    "mysql2": "^3.11.0",
     "peerjs": "^1.5.4",
     "streamsaver": "^2.0.6",
     "vite": "^5.4.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "concurrently": "^9.0.1"
   }
 }
