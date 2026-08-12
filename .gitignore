@@ -1,0 +1,22 @@
+node_modules/
+dist/
+
+.env
+.env.local
+.env.*.local
+
+*.log
+dev.log
+api.log
+vite.log
+
+# local notes, not part of the app
+CLAUDE.md
+PLAN.md
+*.zip
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
