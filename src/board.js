@@ -122,7 +122,7 @@ function corners(it) {
 // single source of truth for the cursor, so releasing the mouse never forgets
 // that ctrl is still held
 function idleCursor() {
-  if (ctrlHeld) return 'grab';
+  if (ctrlHeld) return 'grab';        // ctrl pans the board
   return tool === 'pan' ? 'grab' : 'crosshair';
 }
 
@@ -446,8 +446,8 @@ export function boardPanel() {
     if (textInput) return;
     canvas.setPointerCapture(e.pointerId);
 
-    // middle mouse, space-drag, or the hand tool pans
-    if (e.button === 1 || tool === 'pan' || e.shiftKey) {
+    // ctrl, middle mouse, shift, or the hand tool all pan the board
+    if (e.button === 1 || tool === 'pan' || e.shiftKey || e.ctrlKey || e.metaKey) {
       panning = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
       canvas.style.cursor = 'grabbing';
       return;
@@ -462,14 +462,12 @@ export function boardPanel() {
       return;
     }
 
-    // clicking text always selects it, whatever tool is active. ctrl also drags it.
+    // pressing anywhere inside text selects it and starts moving it
     const hit = textAt(w);
     if (hit) {
       selected = hit;
-      if (ctrlHeld || e.ctrlKey || e.metaKey) {
-        dragging = { item: hit, dx: w.x - hit.x, dy: w.y - hit.y, moved: false };
-        canvas.style.cursor = 'grabbing';
-      }
+      dragging = { item: hit, dx: w.x - hit.x, dy: w.y - hit.y, moved: false };
+      canvas.style.cursor = 'grabbing';
       redraw();
       return;
     }
@@ -523,6 +521,7 @@ export function boardPanel() {
         const corner = handleAt(w);
         canvas.style.cursor = corner !== -1
           ? (corner === 0 || corner === 3 ? 'nwse-resize' : 'nesw-resize')
+          : (!ctrlHeld && textAt(w)) ? 'move'
           : idleCursor();
       }
       return;
@@ -671,7 +670,7 @@ export function boardPanel() {
         onClick: () => { view = { x: 0, y: 0, zoom: 1 }; zoomLabel.textContent = '100%'; redraw(); },
       }, 'Reset')
     ),
-    h('div', { class: 'board-hint' }, 'Click text to select · Ctrl+drag to move · pull corners to resize')
+    h('div', { class: 'board-hint' }, 'Drag text to move it · pull its corners to resize · Ctrl+drag to pan the board')
   );
 
   canvas.style.cursor = 'crosshair';
