@@ -1,4 +1,4 @@
-import { h, icon, ICONS } from './ui.js';
+import { h, icon, ICONS, toast } from './ui.js';
 import { send } from './peer.js';
 import { session, on } from './session.js';
 
@@ -7,6 +7,10 @@ const WIDTHS = [2, 4, 8];
 const MIN_TEXT = 8;
 const MAX_TEXT = 400;
 const HANDLE = 7;        // corner box, screen px
+// images go as one base64 message on the same channel as chat, so a huge one
+// stalls everything behind it. downscale past this instead of sending it raw.
+const MAX_IMAGE = 8 * 1024 * 1024;
+const MAX_DIM = 1600;
 const BATCH_MS = 45;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 5;
@@ -30,6 +34,17 @@ let flushTimer = null;
 let panning = null;
 let textInput = null;
 
+// id -> decoded <img>. images live only as long as the session does.
+const imgCache = new Map();
+
+function loadImage(id, dataUrl, onReady) {
+  const img = new Image();
+  img.onload = () => onReady?.(img);
+  img.src = dataUrl;
+  imgCache.set(id, img);
+  return img;
+}
+
 export function resetBoard() {
   items = [];
   drawing = null;
@@ -37,6 +52,7 @@ export function resetBoard() {
   selected = null;
   dragging = null;
   resizing = null;
+  imgCache.clear();
   view = { x: 0, y: 0, zoom: 1 };
   boardEl = null;
   canvas = null;
@@ -195,6 +211,21 @@ function paint(it) {
     return;
   }
 
+  if (it.kind === 'image') {
+    const img = imgCache.get(it.id);
+    if (img?.complete && img.naturalWidth) {
+      ctx.drawImage(img, it.x, it.y, it.w, it.h);
+    } else {
+      ctx.save();
+      ctx.strokeStyle = '#3f3f46';
+      ctx.lineWidth = 1 / view.zoom;
+      ctx.strokeRect(it.x, it.y, it.w, it.h);
+      ctx.restore();
+    }
+    if (it === selected) drawSelection(it);
+    return;
+  }
+
   const p = it.points;
   if (!p || !p.length) return;
 
@@ -292,22 +323,87 @@ on('wb-text', (p) => {
   redraw();
 });
 
-on('wb-clear', () => { items = []; selected = null; redraw(); });
+on('wb-image', (p) => {
+  if (!p?.strokeId || typeof p.data !== 'string') return;
+  if (!p.data.startsWith('data:image/')) return;
+  if (items.some((x) => x.id === p.strokeId)) return;
+  const it = {
+    id: p.strokeId, kind: 'image', mine: false,
+    x: p.x, y: p.y, w: p.w, h: p.h,
+  };
+  loadImage(it.id, p.data, redraw);
+  items.push(it);
+  redraw();
+});
+
+on('wb-clear', () => { items = []; selected = null; imgCache.clear(); redraw(); });
 
 on('wb-undo', (p) => {
   if (!p?.strokeId) return;
   if (selected?.id === p.strokeId) selected = null;
+  imgCache.delete(p.strokeId);
   items = items.filter((x) => x.id !== p.strokeId);
   redraw();
 });
 
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+// re-encode anything oversized so a single message can't clog the channel
+function shrink(img, original, mime) {
+  const big = Math.max(img.naturalWidth, img.naturalHeight);
+  if (big <= MAX_DIM && original.length < 1.5 * 1024 * 1024) return original;
+
+  const k = Math.min(MAX_DIM / big, 1);
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * k);
+  c.height = Math.round(img.naturalHeight * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  // png keeps transparency, everything else is cheaper as jpeg
+  return c.toDataURL(mime === 'image/png' ? 'image/png' : 'image/jpeg', 0.82);
+}
+
+// drops an image at the centre of whatever you're currently looking at
+function addImage(file) {
+  if (!file.type.startsWith('image/')) return;
+  if (file.size > MAX_IMAGE) {
+    toast(`Image too big (max ${Math.round(MAX_IMAGE / 1024 / 1024)}MB)`, 'err');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const probe = new Image();
+    probe.onload = () => {
+      const data = shrink(probe, String(reader.result), file.type);
+      const r = canvas.getBoundingClientRect();
+      // fit inside roughly half the viewport so it lands at a usable size
+      const maxW = (r.width / view.zoom) * 0.5;
+      const maxH = (r.height / view.zoom) * 0.5;
+      const scale = Math.min(maxW / probe.naturalWidth, maxH / probe.naturalHeight, 1);
+      const w = probe.naturalWidth * scale;
+      const hh = probe.naturalHeight * scale;
+      const cx = (r.width / 2 - view.x) / view.zoom;
+      const cy = (r.height / 2 - view.y) / view.zoom;
+
+      const it = { id: newId(), kind: 'image', mine: true, x: cx - w / 2, y: cy - hh / 2, w, h: hh };
+      loadImage(it.id, data, redraw);
+      items.push(it);
+      selected = it;
+      redraw();
+
+      send(session.conn, 'wb-image', {
+        strokeId: it.id, data, x: it.x, y: it.y, w: it.w, h: it.h,
+      });
+    };
+    probe.src = data;
+  };
+  reader.readAsDataURL(file);
+}
+
 // topmost text under the cursor. w/h are filled in by paint().
 function textAt(w) {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
-    if (it.kind !== 'text' || it.w == null) continue;
+    if ((it.kind !== 'text' && it.kind !== 'image') || it.w == null) continue;
     if (w.x >= it.x - 3 && w.x <= it.x + it.w + 3 && w.y >= it.y - 2 && w.y <= it.y + it.h + 2) return it;
   }
   return null;
@@ -319,7 +415,13 @@ on('wb-move', (p) => {
   if (!it) return;
   it.x = p.x;
   it.y = p.y;
-  if (p.size) { it.size = p.size; measure(it); }
+  if (it.kind === 'image') {
+    if (p.w) it.w = p.w;
+    if (p.h) it.h = p.h;
+  } else if (p.size) {
+    it.size = p.size;
+    measure(it);
+  }
   redraw();
 });
 
@@ -408,6 +510,17 @@ export function boardPanel() {
     // alt-tabbing away leaves ctrl stuck otherwise
     window.addEventListener('blur', () => { ctrlHeld = false; });
 
+    window.addEventListener('paste', (e) => {
+      if (textInput || !boardEl?.isConnected) return;
+      for (const item of e.clipboardData?.items || []) {
+        if (item.type.startsWith('image/')) {
+          const f = item.getAsFile();
+          if (f) { e.preventDefault(); addImage(f); }
+          return;
+        }
+      }
+    });
+
     window.addEventListener('keydown', (e) => {
       if (textInput) return;
       if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
@@ -436,6 +549,12 @@ export function boardPanel() {
     redraw();
   }
 
+  canvas.addEventListener('dragover', (e) => e.preventDefault());
+  canvas.addEventListener('drop', (e) => {
+    e.preventDefault();
+    for (const f of e.dataTransfer?.files || []) if (f.type.startsWith('image/')) addImage(f);
+  });
+
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const r = canvas.getBoundingClientRect();
@@ -458,7 +577,13 @@ export function boardPanel() {
     // corner of the selected text starts a resize
     const corner = handleAt(w);
     if (corner !== -1) {
-      resizing = { item: selected, startSize: selected.size || 16, anchor: anchorFor(selected, corner), start: w };
+      resizing = {
+        item: selected,
+        startSize: selected.size || 16,
+        startW: selected.w, startH: selected.h,
+        anchor: anchorFor(selected, corner),
+        start: w,
+      };
       return;
     }
 
@@ -496,8 +621,14 @@ export function boardPanel() {
       const was = Math.hypot(resizing.start.x - a.x, resizing.start.y - a.y);
       const now = Math.hypot(w.x - a.x, w.y - a.y);
       if (was > 0.01) {
-        it.size = Math.min(Math.max(resizing.startSize * (now / was), MIN_TEXT), MAX_TEXT);
-        measure(it);
+        const k = now / was;
+        if (it.kind === 'image') {
+          it.w = Math.max(resizing.startW * k, 20);
+          it.h = Math.max(resizing.startH * k, 20);
+        } else {
+          it.size = Math.min(Math.max(resizing.startSize * k, MIN_TEXT), MAX_TEXT);
+          measure(it);
+        }
         // keep the anchor corner pinned as the box grows
         if (a.corner === 0) { it.x = a.x - it.w; it.y = a.y - it.h; }
         else if (a.corner === 1) { it.y = a.y - it.h; }
@@ -547,7 +678,7 @@ export function boardPanel() {
     if (resizing) {
       const it = resizing.item;
       if (resizing.moved) {
-        send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size });
+        send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size, w: it.w, h: it.h });
       }
       resizing = null;
       redraw();
@@ -556,7 +687,7 @@ export function boardPanel() {
     if (dragging) {
       const it = dragging.item;
       if (dragging.moved) {
-        send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size });
+        send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size, w: it.w, h: it.h });
       }
       dragging = null;
       canvas.style.cursor = idleCursor();
@@ -632,6 +763,11 @@ export function boardPanel() {
     } }))
   );
 
+  const imgPicker = h('input', {
+    type: 'file', accept: 'image/*', style: { display: 'none' },
+    onChange: (e) => { for (const f of e.target.files) addImage(f); e.target.value = ''; },
+  });
+
   function undoMine() {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i].mine) {
@@ -657,9 +793,11 @@ export function boardPanel() {
       h('span', { class: 'tool-div' }),
       ...widthBtns,
       h('span', { class: 'tool-div' }),
+      h('button', { class: 'btn-icon', title: 'Add image (or paste)', onClick: () => imgPicker.click() }, icon(ICONS.image, 15)),
       h('button', { class: 'btn-icon', title: 'Undo my last', onClick: undoMine }, icon(ICONS.undo, 15)),
       h('button', { class: 'btn-icon', title: 'Clear board', onClick: clearAll }, icon(ICONS.trash, 15))
     ),
+    imgPicker,
     h('div', { class: 'zoom-pill' },
       h('button', { class: 'btn-icon', title: 'Zoom out', onClick: () => setZoom(view.zoom / 1.25) }, '−'),
       zoomLabel,
