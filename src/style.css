@@ -328,6 +328,13 @@ input, textarea, select { font-family: var(--ui); }
   font-size: 11px; color: var(--tx-muted); min-width: 40px; text-align: center;
 }
 .board-tools .btn-icon { font-size: 11.5px; font-weight: 600; }
+.board-hint {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  font-size: 10.5px; color: var(--tx-faint); pointer-events: none;
+  background: rgba(19,19,22,.75); border-radius: 6px; padding: 4px 10px;
+  white-space: nowrap;
+}
+
 .board-text {
   position: fixed; z-index: 40;
   background: rgba(19,19,22,.95); border: 1px solid var(--bd-hover); border-radius: 6px;

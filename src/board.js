@@ -119,11 +119,30 @@ function corners(it) {
   return [[x, y], [x + w, y], [x, y + hh], [x + w, y + hh]];
 }
 
+// single source of truth for the cursor, so releasing the mouse never forgets
+// that ctrl is still held
+function idleCursor() {
+  if (ctrlHeld) return 'grab';
+  return tool === 'pan' ? 'grab' : 'crosshair';
+}
+
 // the corner opposite the one being dragged stays put while resizing
 function anchorFor(it, corner) {
   const cs = corners(it);
   const opposite = [3, 2, 1, 0][corner];
   return { x: cs[opposite][0], y: cs[opposite][1], corner };
+}
+
+// measure without waiting for a paint, so text is clickable the moment it exists
+function measure(it) {
+  if (!ctx) return;
+  const size = it.size || 16;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = `${size}px 'Instrument Sans', sans-serif`;
+  it.w = ctx.measureText(it.text).width;
+  it.h = size * 1.25;
+  ctx.restore();
 }
 
 // which corner is under the cursor, if any
@@ -263,11 +282,13 @@ on('wb-stroke', (p) => {
 on('wb-text', (p) => {
   if (!p?.strokeId || typeof p.text !== 'string') return;
   if (items.some((x) => x.id === p.strokeId)) return;
-  items.push({
+  const incoming = {
     id: p.strokeId, kind: 'text', mine: false,
     color: p.color || '#ececee', text: p.text.slice(0, 200),
     x: p.x, y: p.y, size: p.size || 16,
-  });
+  };
+  measure(incoming);
+  items.push(incoming);
   redraw();
 });
 
@@ -298,7 +319,7 @@ on('wb-move', (p) => {
   if (!it) return;
   it.x = p.x;
   it.y = p.y;
-  if (p.size) it.size = p.size;
+  if (p.size) { it.size = p.size; measure(it); }
   redraw();
 });
 
@@ -328,7 +349,9 @@ function commitText(world) {
     el.remove();
     if (!save || !text) return;
     const it = { id: newId(), kind: 'text', mine: true, color, text, x: world.x, y: world.y, size: textSize };
+    measure(it);
     items.push(it);
+    selected = it;
     send(session.conn, 'wb-text', {
       strokeId: it.id, text, color, x: world.x, y: world.y, size: textSize,
     });
@@ -378,7 +401,7 @@ export function boardPanel() {
       const now = e.ctrlKey || e.metaKey;
       if (now === ctrlHeld) return;
       ctrlHeld = now;
-      if (canvas) canvas.style.cursor = now ? 'grab' : (tool === 'pan' ? 'grab' : 'crosshair');
+      if (canvas && !dragging && !resizing && !panning) canvas.style.cursor = idleCursor();
     };
     window.addEventListener('keydown', setCtrl);
     window.addEventListener('keyup', setCtrl);
@@ -439,19 +462,14 @@ export function boardPanel() {
       return;
     }
 
-    // ctrl turns any tool into a move tool for text
+    // clicking text always selects it, whatever tool is active. ctrl also drags it.
     const hit = textAt(w);
-    if (hit && (ctrlHeld || e.ctrlKey || e.metaKey)) {
+    if (hit) {
       selected = hit;
-      dragging = { item: hit, dx: w.x - hit.x, dy: w.y - hit.y, moved: false };
-      canvas.style.cursor = 'grabbing';
-      redraw();
-      return;
-    }
-
-    // plain click on text just selects it, so the handles appear
-    if (hit && tool === 'text') {
-      selected = hit;
+      if (ctrlHeld || e.ctrlKey || e.metaKey) {
+        dragging = { item: hit, dx: w.x - hit.x, dy: w.y - hit.y, moved: false };
+        canvas.style.cursor = 'grabbing';
+      }
       redraw();
       return;
     }
@@ -481,6 +499,7 @@ export function boardPanel() {
       const now = Math.hypot(w.x - a.x, w.y - a.y);
       if (was > 0.01) {
         it.size = Math.min(Math.max(resizing.startSize * (now / was), MIN_TEXT), MAX_TEXT);
+        measure(it);
         // keep the anchor corner pinned as the box grows
         if (a.corner === 0) { it.x = a.x - it.w; it.y = a.y - it.h; }
         else if (a.corner === 1) { it.y = a.y - it.h; }
@@ -504,8 +523,7 @@ export function boardPanel() {
         const corner = handleAt(w);
         canvas.style.cursor = corner !== -1
           ? (corner === 0 || corner === 3 ? 'nwse-resize' : 'nesw-resize')
-          : (ctrlHeld && textAt(w)) ? 'grab'
-          : tool === 'pan' ? 'grab' : 'crosshair';
+          : idleCursor();
       }
       return;
     }
@@ -524,7 +542,7 @@ export function boardPanel() {
   const finish = () => {
     if (panning) {
       panning = null;
-      canvas.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+      canvas.style.cursor = idleCursor();
       return;
     }
     if (resizing) {
@@ -542,7 +560,7 @@ export function boardPanel() {
         send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size });
       }
       dragging = null;
-      canvas.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+      canvas.style.cursor = idleCursor();
       redraw();
       return;
     }
@@ -652,7 +670,8 @@ export function boardPanel() {
         class: 'btn-icon', title: 'Reset view', style: { width: 'auto', padding: '0 8px', fontSize: '11px' },
         onClick: () => { view = { x: 0, y: 0, zoom: 1 }; zoomLabel.textContent = '100%'; redraw(); },
       }, 'Reset')
-    )
+    ),
+    h('div', { class: 'board-hint' }, 'Click text to select · Ctrl+drag to move · pull corners to resize')
   );
 
   canvas.style.cursor = 'crosshair';
