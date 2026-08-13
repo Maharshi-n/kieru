@@ -4,7 +4,9 @@ import { session, on } from './session.js';
 
 const COLORS = ['#ececee', '#6f9fd8', '#a78bdb', '#8fbf7f', '#d9a25f', '#d87f8b'];
 const WIDTHS = [2, 4, 8];
-const TEXT_SIZES = [14, 20, 28, 40];
+const MIN_TEXT = 8;
+const MAX_TEXT = 400;
+const HANDLE = 7;        // corner box, screen px
 const BATCH_MS = 45;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 5;
@@ -14,9 +16,12 @@ const MAX_ZOOM = 5;
 let items = [];
 let canvas = null, ctx = null;
 let color = COLORS[0], width = WIDTHS[0];
-let textSize = TEXT_SIZES[1];
+let textSize = 20;
 let tool = 'pen';
 let dragging = null;
+let resizing = null;
+let selected = null;
+let ctrlHeld = false;
 let view = { x: 0, y: 0, zoom: 1 };
 
 let drawing = null;
@@ -29,6 +34,9 @@ export function resetBoard() {
   items = [];
   drawing = null;
   pending = [];
+  selected = null;
+  dragging = null;
+  resizing = null;
   view = { x: 0, y: 0, zoom: 1 };
   boardEl = null;
   canvas = null;
@@ -77,6 +85,58 @@ function redraw() {
   if (drawing) paint(drawing);
 }
 
+// dotted box with four corner handles. drawn in world units scaled by zoom so it
+// stays a constant thickness on screen.
+function drawSelection(it) {
+  const z = view.zoom;
+  const pad = 4 / z;
+  const x = it.x - pad, y = it.y - pad;
+  const w = it.w + pad * 2, hh = it.h + pad * 2;
+
+  ctx.save();
+  ctx.strokeStyle = '#8b8b93';
+  ctx.lineWidth = 1 / z;
+  ctx.setLineDash([4 / z, 3 / z]);
+  ctx.strokeRect(x, y, w, hh);
+
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#131316';
+  ctx.strokeStyle = '#ececee';
+  const s = HANDLE / z;
+  for (const [cx, cy] of corners(it)) {
+    ctx.beginPath();
+    ctx.rect(cx - s / 2, cy - s / 2, s, s);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function corners(it) {
+  const pad = 4 / view.zoom;
+  const x = it.x - pad, y = it.y - pad;
+  const w = it.w + pad * 2, hh = it.h + pad * 2;
+  return [[x, y], [x + w, y], [x, y + hh], [x + w, y + hh]];
+}
+
+// the corner opposite the one being dragged stays put while resizing
+function anchorFor(it, corner) {
+  const cs = corners(it);
+  const opposite = [3, 2, 1, 0][corner];
+  return { x: cs[opposite][0], y: cs[opposite][1], corner };
+}
+
+// which corner is under the cursor, if any
+function handleAt(world) {
+  if (!selected || selected.w == null) return -1;
+  const r = (HANDLE + 3) / view.zoom;
+  const cs = corners(selected);
+  for (let i = 0; i < cs.length; i++) {
+    if (Math.abs(world.x - cs[i][0]) <= r && Math.abs(world.y - cs[i][1]) <= r) return i;
+  }
+  return -1;
+}
+
 // dots stay put in world space so panning feels like moving over a surface
 function grid() {
   const step = 40;
@@ -112,14 +172,7 @@ function paint(it) {
     // remember the box so pointer hits can find this text later
     it.w = ctx.measureText(it.text).width;
     it.h = size * 1.25;
-    if (it === dragging?.item) {
-      ctx.save();
-      ctx.strokeStyle = '#8b8b93';
-      ctx.lineWidth = 1 / view.zoom;
-      ctx.setLineDash([4 / view.zoom, 3 / view.zoom]);
-      ctx.strokeRect(it.x - 3, it.y - 2, it.w + 6, it.h + 2);
-      ctx.restore();
-    }
+    if (it === selected) drawSelection(it);
     return;
   }
 
@@ -218,10 +271,11 @@ on('wb-text', (p) => {
   redraw();
 });
 
-on('wb-clear', () => { items = []; redraw(); });
+on('wb-clear', () => { items = []; selected = null; redraw(); });
 
 on('wb-undo', (p) => {
   if (!p?.strokeId) return;
+  if (selected?.id === p.strokeId) selected = null;
   items = items.filter((x) => x.id !== p.strokeId);
   redraw();
 });
@@ -318,6 +372,31 @@ export function boardPanel() {
   if (!resizeBound) {
     window.addEventListener('resize', () => fit());
     new ResizeObserver(() => fit()).observe(canvas);
+
+    // hold ctrl to move text with any tool selected
+    const setCtrl = (e) => {
+      const now = e.ctrlKey || e.metaKey;
+      if (now === ctrlHeld) return;
+      ctrlHeld = now;
+      if (canvas) canvas.style.cursor = now ? 'grab' : (tool === 'pan' ? 'grab' : 'crosshair');
+    };
+    window.addEventListener('keydown', setCtrl);
+    window.addEventListener('keyup', setCtrl);
+    // alt-tabbing away leaves ctrl stuck otherwise
+    window.addEventListener('blur', () => { ctrlHeld = false; });
+
+    window.addEventListener('keydown', (e) => {
+      if (textInput) return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+        const it = selected;
+        items = items.filter((x) => x !== it);
+        selected = null;
+        send(session.conn, 'wb-undo', { strokeId: it.id });
+        redraw();
+      }
+      if (e.key === 'Escape' && selected) { selected = null; redraw(); }
+    });
+
     resizeBound = true;
   }
 
@@ -353,14 +432,31 @@ export function boardPanel() {
 
     const w = toWorld(e);
 
-    // grab existing text before anything else, whatever tool is selected
+    // corner of the selected text starts a resize
+    const corner = handleAt(w);
+    if (corner !== -1) {
+      resizing = { item: selected, startSize: selected.size || 16, anchor: anchorFor(selected, corner), start: w };
+      return;
+    }
+
+    // ctrl turns any tool into a move tool for text
     const hit = textAt(w);
-    if (hit) {
+    if (hit && (ctrlHeld || e.ctrlKey || e.metaKey)) {
+      selected = hit;
       dragging = { item: hit, dx: w.x - hit.x, dy: w.y - hit.y, moved: false };
-      canvas.style.cursor = 'move';
+      canvas.style.cursor = 'grabbing';
       redraw();
       return;
     }
+
+    // plain click on text just selects it, so the handles appear
+    if (hit && tool === 'text') {
+      selected = hit;
+      redraw();
+      return;
+    }
+
+    if (selected) { selected = null; redraw(); }
 
     if (tool === 'text') { commitText(w); return; }
 
@@ -376,6 +472,24 @@ export function boardPanel() {
       redraw();
       return;
     }
+    if (resizing) {
+      const w = toWorld(e);
+      const it = resizing.item;
+      const a = resizing.anchor;
+      // scale by how far the cursor is from the anchor vs where it started
+      const was = Math.hypot(resizing.start.x - a.x, resizing.start.y - a.y);
+      const now = Math.hypot(w.x - a.x, w.y - a.y);
+      if (was > 0.01) {
+        it.size = Math.min(Math.max(resizing.startSize * (now / was), MIN_TEXT), MAX_TEXT);
+        // keep the anchor corner pinned as the box grows
+        if (a.corner === 0) { it.x = a.x - it.w; it.y = a.y - it.h; }
+        else if (a.corner === 1) { it.y = a.y - it.h; }
+        else if (a.corner === 2) { it.x = a.x - it.w; }
+      }
+      resizing.moved = true;
+      redraw();
+      return;
+    }
     if (dragging) {
       const w = toWorld(e);
       dragging.item.x = w.x - dragging.dx;
@@ -385,8 +499,14 @@ export function boardPanel() {
       return;
     }
     if (!drawing) {
-      // hint that text can be picked up
-      if (!panning) canvas.style.cursor = textAt(toWorld(e)) ? 'move' : (tool === 'pan' ? 'grab' : 'crosshair');
+      if (!panning) {
+        const w = toWorld(e);
+        const corner = handleAt(w);
+        canvas.style.cursor = corner !== -1
+          ? (corner === 0 || corner === 3 ? 'nwse-resize' : 'nesw-resize')
+          : (ctrlHeld && textAt(w)) ? 'grab'
+          : tool === 'pan' ? 'grab' : 'crosshair';
+      }
       return;
     }
 
@@ -405,6 +525,15 @@ export function boardPanel() {
     if (panning) {
       panning = null;
       canvas.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+      return;
+    }
+    if (resizing) {
+      const it = resizing.item;
+      if (resizing.moved) {
+        send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size });
+      }
+      resizing = null;
+      redraw();
       return;
     }
     if (dragging) {
@@ -486,27 +615,6 @@ export function boardPanel() {
     } }))
   );
 
-  // applies to the selected text if there is one, otherwise sets the size for new text
-  function bumpSize(delta) {
-    const target = dragging?.item ?? lastText();
-    const i = TEXT_SIZES.indexOf(target ? target.size : textSize);
-    const next = TEXT_SIZES[Math.min(Math.max((i === -1 ? 1 : i) + delta, 0), TEXT_SIZES.length - 1)];
-    if (target) {
-      target.size = next;
-      send(session.conn, 'wb-move', { strokeId: target.id, x: target.x, y: target.y, size: next });
-    }
-    textSize = next;
-    sizeLabel.textContent = next + 'px';
-    redraw();
-  }
-
-  function lastText() {
-    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'text' && items[i].mine) return items[i];
-    return null;
-  }
-
-  const sizeLabel = h('span', { class: 'zoom-label mono' }, textSize + 'px');
-
   function undoMine() {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i].mine) {
@@ -531,10 +639,6 @@ export function boardPanel() {
       ...swatches,
       h('span', { class: 'tool-div' }),
       ...widthBtns,
-      h('span', { class: 'tool-div' }),
-      h('button', { class: 'btn-icon', title: 'Smaller text', onClick: () => bumpSize(-1) }, 'A−'),
-      sizeLabel,
-      h('button', { class: 'btn-icon', title: 'Bigger text', onClick: () => bumpSize(1) }, 'A+'),
       h('span', { class: 'tool-div' }),
       h('button', { class: 'btn-icon', title: 'Undo my last', onClick: undoMine }, icon(ICONS.undo, 15)),
       h('button', { class: 'btn-icon', title: 'Clear board', onClick: clearAll }, icon(ICONS.trash, 15))
