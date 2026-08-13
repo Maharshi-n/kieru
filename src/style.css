@@ -327,6 +327,7 @@ input, textarea, select { font-family: var(--ui); }
 .zoom-label {
   font-size: 11px; color: var(--tx-muted); min-width: 40px; text-align: center;
 }
+.board-tools .btn-icon { font-size: 11.5px; font-weight: 600; }
 .board-text {
   position: fixed; z-index: 40;
   background: rgba(19,19,22,.95); border: 1px solid var(--bd-hover); border-radius: 6px;

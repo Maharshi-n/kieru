@@ -4,6 +4,7 @@ import { session, on } from './session.js';
 
 const COLORS = ['#ececee', '#6f9fd8', '#a78bdb', '#8fbf7f', '#d9a25f', '#d87f8b'];
 const WIDTHS = [2, 4, 8];
+const TEXT_SIZES = [14, 20, 28, 40];
 const BATCH_MS = 45;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 5;
@@ -13,7 +14,9 @@ const MAX_ZOOM = 5;
 let items = [];
 let canvas = null, ctx = null;
 let color = COLORS[0], width = WIDTHS[0];
+let textSize = TEXT_SIZES[1];
 let tool = 'pen';
+let dragging = null;
 let view = { x: 0, y: 0, zoom: 1 };
 
 let drawing = null;
@@ -46,15 +49,25 @@ function fit() {
   if (!canvas) return;
   const r = canvas.getBoundingClientRect();
   if (!r.width || !r.height) return;   // detached or hidden, nothing to size to
-  canvas.width = r.width * dpr();
-  canvas.height = r.height * dpr();
+
+  const w = Math.round(r.width * dpr());
+  const h = Math.round(r.height * dpr());
+  // setting width/height clears the canvas, so only touch it when it really changed
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
   if (!ctx) ctx = canvas.getContext('2d');
   redraw();
 }
 
 function redraw() {
   if (!ctx || !canvas) return;
-  const d = dpr();
+  const r = canvas.getBoundingClientRect();
+  if (!r.width) return;
+  // derive the scale from the backing store rather than reading dpr() again, or
+  // the transform and the actual canvas size can disagree and clicks land off-target
+  const d = canvas.width / r.width;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(view.zoom * d, 0, 0, view.zoom * d, view.x * d, view.y * d);
@@ -92,9 +105,21 @@ function paint(it) {
   ctx.lineJoin = 'round';
 
   if (it.kind === 'text') {
-    ctx.font = `${it.size || 16}px 'Instrument Sans', sans-serif`;
+    const size = it.size || 16;
+    ctx.font = `${size}px 'Instrument Sans', sans-serif`;
     ctx.textBaseline = 'top';
     ctx.fillText(it.text, it.x, it.y);
+    // remember the box so pointer hits can find this text later
+    it.w = ctx.measureText(it.text).width;
+    it.h = size * 1.25;
+    if (it === dragging?.item) {
+      ctx.save();
+      ctx.strokeStyle = '#8b8b93';
+      ctx.lineWidth = 1 / view.zoom;
+      ctx.setLineDash([4 / view.zoom, 3 / view.zoom]);
+      ctx.strokeRect(it.x - 3, it.y - 2, it.w + 6, it.h + 2);
+      ctx.restore();
+    }
     return;
   }
 
@@ -203,6 +228,26 @@ on('wb-undo', (p) => {
 
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+// topmost text under the cursor. w/h are filled in by paint().
+function textAt(w) {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind !== 'text' || it.w == null) continue;
+    if (w.x >= it.x - 3 && w.x <= it.x + it.w + 3 && w.y >= it.y - 2 && w.y <= it.y + it.h + 2) return it;
+  }
+  return null;
+}
+
+on('wb-move', (p) => {
+  if (!p?.strokeId) return;
+  const it = items.find((x) => x.id === p.strokeId);
+  if (!it) return;
+  it.x = p.x;
+  it.y = p.y;
+  if (p.size) it.size = p.size;
+  redraw();
+});
+
 function commitText(world) {
   if (textInput) return;
   const r = canvas.getBoundingClientRect();
@@ -213,7 +258,7 @@ function commitText(world) {
       left: r.left + world.x * view.zoom + view.x + 'px',
       top: r.top + world.y * view.zoom + view.y + 'px',
       color,
-      fontSize: Math.max(11, 16 * view.zoom) + 'px',
+      fontSize: Math.max(11, textSize * view.zoom) + 'px',
     },
   });
 
@@ -228,10 +273,10 @@ function commitText(world) {
     textInput = null;
     el.remove();
     if (!save || !text) return;
-    const it = { id: newId(), kind: 'text', mine: true, color, text, x: world.x, y: world.y, size: 16 };
+    const it = { id: newId(), kind: 'text', mine: true, color, text, x: world.x, y: world.y, size: textSize };
     items.push(it);
     send(session.conn, 'wb-text', {
-      strokeId: it.id, text, color, x: world.x, y: world.y, size: 16,
+      strokeId: it.id, text, color, x: world.x, y: world.y, size: textSize,
     });
     redraw();
   };
@@ -268,8 +313,11 @@ export function boardPanel() {
     ctx = canvas.getContext('2d');
     fit();
   });
+  // the window resize event misses the chat divider being dragged, which changes
+  // the canvas size without the window changing. observe the element itself.
   if (!resizeBound) {
     window.addEventListener('resize', () => fit());
+    new ResizeObserver(() => fit()).observe(canvas);
     resizeBound = true;
   }
 
@@ -304,6 +352,16 @@ export function boardPanel() {
     }
 
     const w = toWorld(e);
+
+    // grab existing text before anything else, whatever tool is selected
+    const hit = textAt(w);
+    if (hit) {
+      dragging = { item: hit, dx: w.x - hit.x, dy: w.y - hit.y, moved: false };
+      canvas.style.cursor = 'move';
+      redraw();
+      return;
+    }
+
     if (tool === 'text') { commitText(w); return; }
 
     drawing = { id: newId(), kind: tool, mine: true, color, width, points: [[w.x, w.y]] };
@@ -318,7 +376,19 @@ export function boardPanel() {
       redraw();
       return;
     }
-    if (!drawing) return;
+    if (dragging) {
+      const w = toWorld(e);
+      dragging.item.x = w.x - dragging.dx;
+      dragging.item.y = w.y - dragging.dy;
+      dragging.moved = true;
+      redraw();
+      return;
+    }
+    if (!drawing) {
+      // hint that text can be picked up
+      if (!panning) canvas.style.cursor = textAt(toWorld(e)) ? 'move' : (tool === 'pan' ? 'grab' : 'crosshair');
+      return;
+    }
 
     const w = toWorld(e);
     if (drawing.kind === 'pen') {
@@ -334,7 +404,17 @@ export function boardPanel() {
   const finish = () => {
     if (panning) {
       panning = null;
-      canvas.style.cursor = '';
+      canvas.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+      return;
+    }
+    if (dragging) {
+      const it = dragging.item;
+      if (dragging.moved) {
+        send(session.conn, 'wb-move', { strokeId: it.id, x: it.x, y: it.y, size: it.size });
+      }
+      dragging = null;
+      canvas.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+      redraw();
       return;
     }
     if (!drawing) return;
@@ -406,6 +486,27 @@ export function boardPanel() {
     } }))
   );
 
+  // applies to the selected text if there is one, otherwise sets the size for new text
+  function bumpSize(delta) {
+    const target = dragging?.item ?? lastText();
+    const i = TEXT_SIZES.indexOf(target ? target.size : textSize);
+    const next = TEXT_SIZES[Math.min(Math.max((i === -1 ? 1 : i) + delta, 0), TEXT_SIZES.length - 1)];
+    if (target) {
+      target.size = next;
+      send(session.conn, 'wb-move', { strokeId: target.id, x: target.x, y: target.y, size: next });
+    }
+    textSize = next;
+    sizeLabel.textContent = next + 'px';
+    redraw();
+  }
+
+  function lastText() {
+    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'text' && items[i].mine) return items[i];
+    return null;
+  }
+
+  const sizeLabel = h('span', { class: 'zoom-label mono' }, textSize + 'px');
+
   function undoMine() {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i].mine) {
@@ -430,6 +531,10 @@ export function boardPanel() {
       ...swatches,
       h('span', { class: 'tool-div' }),
       ...widthBtns,
+      h('span', { class: 'tool-div' }),
+      h('button', { class: 'btn-icon', title: 'Smaller text', onClick: () => bumpSize(-1) }, 'A−'),
+      sizeLabel,
+      h('button', { class: 'btn-icon', title: 'Bigger text', onClick: () => bumpSize(1) }, 'A+'),
       h('span', { class: 'tool-div' }),
       h('button', { class: 'btn-icon', title: 'Undo my last', onClick: undoMine }, icon(ICONS.undo, 15)),
       h('button', { class: 'btn-icon', title: 'Clear board', onClick: clearAll }, icon(ICONS.trash, 15))
