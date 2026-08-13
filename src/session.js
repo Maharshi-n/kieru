@@ -119,10 +119,26 @@ async function tryReconnect() {
 
 function dial(peerId, timeout = 12000) {
   return new Promise((resolve, reject) => {
+    console.log('[session] dialing', peerId);
     const conn = getPeer().connect(peerId, { reliable: true });
-    const timer = setTimeout(() => { try { conn.close(); } catch {} reject(new Error('timeout')); }, timeout);
-    conn.on('open', () => { clearTimeout(timer); resolve(conn); });
-    conn.on('error', (e) => { clearTimeout(timer); reject(e); });
+
+    // ice state is the only thing that tells us whether nat traversal worked
+    const pc = () => conn.peerConnection;
+    const probe = setInterval(() => {
+      if (pc()) console.log('[session] ice:', pc().iceConnectionState, '| gathering:', pc().iceGatheringState);
+    }, 2000);
+
+    const stop = () => { clearTimeout(timer); clearInterval(probe); };
+    const timer = setTimeout(() => {
+      console.error('[session] dial timed out. ice was:', pc()?.iceConnectionState,
+        '- if this is "checking" or "failed", you need TURN');
+      stop();
+      try { conn.close(); } catch {}
+      reject(new Error('timeout'));
+    }, timeout);
+
+    conn.on('open', () => { stop(); console.log('[session] connected'); resolve(conn); });
+    conn.on('error', (e) => { stop(); console.error('[session] dial error', e?.type, e); reject(e); });
   });
 }
 

@@ -9,6 +9,7 @@ import { resetBoard } from './board.js';
 import { resetFiles } from './files.js';
 import { incoming as incomingCall, hangup } from './voice.js';
 import { incomingShare, resetScreen } from './screen.js';
+import { HAS_TURN } from './config.js';
 
 const app = document.getElementById('app');
 
@@ -109,6 +110,8 @@ async function refresh() {
 
 function onIncomingConn(conn) {
   if (conn.label?.startsWith('xfer:')) return;
+  console.log('[session] incoming dial from', conn.peer);
+  conn.on('error', (e) => console.error('[session] incoming failed', e?.type, e));
 
   if (session.active) {
     conn.on('open', () => { send(conn, 'session-decline'); setTimeout(() => conn.close(), 300); });
@@ -180,7 +183,11 @@ async function startSession(friend) {
   if (!conn) {
     state.dialing = null;
     draw();
-    toast(`${friend.display_name} did not respond`, 'err');
+    // a dial that times out while they are clearly online is almost always
+    // nat traversal, which is what TURN exists to fix
+    toast(HAS_TURN
+      ? `Could not connect to ${friend.display_name}. Try again.`
+      : `Could not connect to ${friend.display_name} — your network needs a TURN server.`, 'err');
     return;
   }
 

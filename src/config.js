@@ -6,6 +6,7 @@ const TURN_USER = import.meta.env.VITE_OPENRELAY_USERNAME || '';
 const TURN_CRED = import.meta.env.VITE_OPENRELAY_CREDENTIAL || '';
 
 export const FORCE_RELAY = new URLSearchParams(location.search).has('relay');
+export const HAS_TURN = !!(TURN_USER && TURN_CRED);
 
 export function iceConfig() {
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
