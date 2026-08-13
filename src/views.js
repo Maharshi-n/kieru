@@ -123,27 +123,33 @@ const GSI_BUTTON = {
   width: 288,
 };
 
-export function friendsView({ friends, pending, onStart, onRefresh, onLogout }) {
-  const wrap = h('div', { class: 'friends' });
+// the friends list redraws every poll. keep the add-row alive across redraws or
+// it steals focus and wipes whatever is half-typed in it.
+let addRow = null;
+let addInput = null;
 
-  const input = h('input', { class: 'field', placeholder: 'Friend name or email' });
-  const add = async () => {
-    const v = input.value.trim();
+function buildAddRow() {
+  addInput = h('input', { class: 'field add-field', placeholder: 'Add someone by name or email' });
+
+  const submit = async () => {
+    const v = addInput.value.trim();
     if (!v) return;
     try {
       await api.post('/friends/request', { handle: v });
-      input.value = '';
+      addInput.value = '';
       toast('Request sent if that account exists');
-      onRefresh();
     } catch (e) { toast(e.message, 'err'); }
   };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
 
-  input.className = 'field add-field';
-  input.placeholder = 'Add someone by name or email';
-  wrap.append(
-    h('div', { class: 'add-row' }, input, h('button', { class: 'btn add-btn', onClick: add }, 'Add'))
-  );
+  addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  addRow = h('div', { class: 'add-row' }, addInput, h('button', { class: 'btn add-btn', onClick: submit }, 'Add'));
+}
+
+export function friendsView({ friends, pending, onStart, onRefresh, onLogout }) {
+  const wrap = h('div', { class: 'friends' });
+
+  if (!addRow) buildAddRow();
+  wrap.append(addRow);
 
   if (pending.length) {
     const sec = h('div', { class: 'section' }, h('div', { class: 'label' }, `Requests (${pending.length})`));

@@ -80,7 +80,7 @@ async function enterApp() {
   await beat();
   heartbeatTimer = setInterval(beat, 20000);
   await refresh();
-  pollTimer = setInterval(refresh, 10000);
+  pollTimer = setInterval(refresh, 5000);
   draw();
 }
 
@@ -88,11 +88,20 @@ async function beat() {
   try { await api.post('/heartbeat', { peer_id: state.peerId }); } catch {}
 }
 
+let lastSnapshot = '';
+
 async function refresh() {
   try {
     const [friends, pending] = await Promise.all([api.get('/friends'), api.get('/friends/pending')]);
     state.friends = friends;
     state.pending = pending;
+
+    // only redraw when something actually changed, otherwise every poll throws
+    // away the dom for no reason
+    const snapshot = JSON.stringify([friends, pending]);
+    if (snapshot === lastSnapshot) return;
+    lastSnapshot = snapshot;
+
     if (!session.active) draw();
   } catch {}
 }
@@ -215,15 +224,29 @@ function renderShell(content, right) {
       : h('div', { class: 'bar-title' }, h('span', {}, 'kieru')),
     right || (state.user
       ? h('div', { class: 'bar-right' },
-          h('span', { class: 'bar-user' }, state.user.display_name),
+          h('div', { class: 'bar-me' },
+            h('span', { class: 'bar-me-name' }, state.user.display_name),
+            state.user.email ? h('span', { class: 'bar-me-mail' }, state.user.email) : null),
           h('button', { class: 'btn-ghost btn-sm', onClick: logout }, 'Sign out'))
       : null)
   );
   render(h('div', { class: 'shell' }, bar, h('div', { class: 'body-row' }, content)));
 }
 
+// re-appending a focused input loses focus and caret, so put them back.
+// without this the 10s poll makes the add-friend box impossible to type in.
 function render(node) {
+  const active = document.activeElement;
+  const keep = active && app.contains(active) && active.tagName === 'INPUT'
+    ? { el: active, start: active.selectionStart, end: active.selectionEnd }
+    : null;
+
   clear(app).append(node);
+
+  if (keep && document.contains(keep.el)) {
+    keep.el.focus();
+    try { keep.el.setSelectionRange(keep.start, keep.end); } catch {}
+  }
 }
 
 // beforeunload doesn't fire on mobile. both can run, the endpoint is idempotent.
