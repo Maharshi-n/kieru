@@ -117,10 +117,10 @@ async function tryReconnect() {
   end('Could not reconnect. Session ended.');
 }
 
-function dial(peerId) {
+function dial(peerId, timeout = 12000) {
   return new Promise((resolve, reject) => {
     const conn = getPeer().connect(peerId, { reliable: true });
-    const timer = setTimeout(() => { try { conn.close(); } catch {} reject(new Error('timeout')); }, 12000);
+    const timer = setTimeout(() => { try { conn.close(); } catch {} reject(new Error('timeout')); }, timeout);
     conn.on('open', () => { clearTimeout(timer); resolve(conn); });
     conn.on('error', (e) => { clearTimeout(timer); reject(e); });
   });

@@ -145,7 +145,7 @@ function buildAddRow() {
   addRow = h('div', { class: 'add-row' }, addInput, h('button', { class: 'btn add-btn', onClick: submit }, 'Add'));
 }
 
-export function friendsView({ friends, pending, onStart, onRefresh, onLogout }) {
+export function friendsView({ friends, pending, onStart, onRefresh, onLogout, dialingId }) {
   const wrap = h('div', { class: 'friends' });
 
   if (!addRow) buildAddRow();
@@ -187,9 +187,11 @@ export function friendsView({ friends, pending, onStart, onRefresh, onLogout }) 
             f.online ? 'Online' : 'Offline'
           )
         ),
-        f.online
-          ? h('button', { class: 'btn', onClick: () => onStart(f) }, 'Start session')
-          : h('span', { class: 'xfer-meta' }, 'unavailable')
+        dialingId === f.user_id
+          ? h('button', { class: 'btn', disabled: true }, h('span', { class: 'spinner' }), 'Calling…')
+          : f.online
+            ? h('button', { class: 'btn', disabled: dialingId != null, onClick: () => onStart(f) }, 'Start session')
+            : h('span', { class: 'xfer-meta' }, 'offline')
       )
     );
   }

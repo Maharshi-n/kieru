@@ -18,7 +18,7 @@ const state = {
   friends: [],
   pending: [],
   config: { googleClientId: null, devLogin: false },
-  dialing: false,
+  dialing: null,
 };
 
 let pollTimer = null;
@@ -102,7 +102,8 @@ async function refresh() {
     if (snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
 
-    if (!session.active) draw();
+    // don't redraw mid-dial, it would replace the "Calling…" button
+    if (!session.active && !state.dialing) draw();
   } catch {}
 }
 
@@ -114,10 +115,19 @@ function onIncomingConn(conn) {
     return;
   }
 
-  const friend = state.friends.find((f) => f.peer_id === conn.peer);
-  if (!friend) { conn.on('open', () => conn.close()); return; }
+  conn.on('open', async () => {
+    // our cached list may not have their current peer id yet, so refresh before
+    // deciding this is a stranger. dropping it silently looked like "request not sent".
+    let friend = state.friends.find((f) => f.peer_id === conn.peer);
+    if (!friend) {
+      const fresh = await api.get('/friends').catch(() => null);
+      if (fresh) {
+        state.friends = fresh;
+        friend = fresh.find((f) => f.peer_id === conn.peer);
+      }
+    }
+    if (!friend) { conn.close(); return; }
 
-  conn.on('open', () => {
     modal({
       title: 'Session request',
       body: `${friend.display_name} wants to start a session.`,
@@ -134,15 +144,43 @@ function onIncomingConn(conn) {
 
 async function startSession(friend) {
   if (state.dialing) return;
-  state.dialing = true;
-  toast(`Calling ${friend.display_name}…`);
+  state.dialing = friend.user_id;
+  draw();
 
-  let conn;
+  // the cached peer id can be seconds old and they may have reloaded since,
+  // so always re-fetch before dialing
+  let target = friend;
   try {
-    conn = await dial(friend.peer_id);
+    const fresh = await api.get('/friends');
+    state.friends = fresh;
+    const f = fresh.find((x) => x.user_id === friend.user_id);
+    if (!f?.online || !f.peer_id) {
+      state.dialing = null;
+      draw();
+      toast(`${friend.display_name} just went offline`, 'err');
+      return;
+    }
+    target = f;
   } catch {
-    state.dialing = false;
-    toast(`${friend.display_name} is unavailable`, 'err');
+    state.dialing = null;
+    draw();
+    toast('Could not reach the server', 'err');
+    return;
+  }
+
+  // one retry: they may have reconnected with a new id between the fetch and the dial
+  let conn = await dial(target.peer_id, 8000).catch(() => null);
+  if (!conn) {
+    const retry = await api.get('/friends').catch(() => null);
+    const f = retry?.find((x) => x.user_id === friend.user_id);
+    if (f?.online && f.peer_id && f.peer_id !== target.peer_id) {
+      conn = await dial(f.peer_id).catch(() => null);
+    }
+  }
+  if (!conn) {
+    state.dialing = null;
+    draw();
+    toast(`${friend.display_name} did not respond`, 'err');
     return;
   }
 
@@ -156,7 +194,7 @@ async function startSession(friend) {
   });
 
   const result = await decided;
-  state.dialing = false;
+  state.dialing = null;
 
   if (result === 'accept') { beginSession(conn, friend); return; }
   try { conn.close(); } catch {}
@@ -209,6 +247,7 @@ function draw() {
     onStart: startSession,
     onRefresh: refresh,
     onLogout: logout,
+    dialingId: state.dialing,
   }));
 }
 
