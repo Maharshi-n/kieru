@@ -237,8 +237,11 @@ export function workspaceView() {
 
   const mainSlot = h('div', { style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } });
   function rerenderMain() {
-    clear(mainSlot);
-    mainSlot.append(activeTab === 'board' ? boardPanel() : activeTab === 'files' ? filesPanel() : screenPanel());
+    // detach rather than clear: these panels cache their dom and clearing would
+    // throw away the canvas and in-flight transfer rows
+    mainSlot.replaceChildren(
+      activeTab === 'board' ? boardPanel() : activeTab === 'files' ? filesPanel() : screenPanel()
+    );
     for (const [i, [t]] of TABS.entries()) tabs[i].classList.toggle('on', t === activeTab);
   }
   rerenderMain();

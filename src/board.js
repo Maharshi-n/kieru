@@ -27,7 +27,9 @@ export function resetBoard() {
   drawing = null;
   pending = [];
   view = { x: 0, y: 0, zoom: 1 };
-  redraw();
+  boardEl = null;
+  canvas = null;
+  ctx = null;
 }
 
 const dpr = () => window.devicePixelRatio || 1;
@@ -43,8 +45,10 @@ function toWorld(e) {
 function fit() {
   if (!canvas) return;
   const r = canvas.getBoundingClientRect();
+  if (!r.width || !r.height) return;   // detached or hidden, nothing to size to
   canvas.width = r.width * dpr();
   canvas.height = r.height * dpr();
+  if (!ctx) ctx = canvas.getContext('2d');
   redraw();
 }
 
@@ -213,10 +217,16 @@ function commitText(world) {
     },
   });
 
+  // removing the input fires blur, which would re-enter done() and throw on the
+  // null textInput before the send ever happened
+  let finished = false;
   const done = (save) => {
-    const text = textInput.value.trim().slice(0, 200);
-    textInput.remove();
+    if (finished) return;
+    finished = true;
+    const el = textInput;
+    const text = el.value.trim().slice(0, 200);
     textInput = null;
+    el.remove();
     if (!save || !text) return;
     const it = { id: newId(), kind: 'text', mine: true, color, text, x: world.x, y: world.y, size: 16 };
     items.push(it);
@@ -235,18 +245,33 @@ function commitText(world) {
   setTimeout(() => textInput?.focus(), 0);
 }
 
+// built once. workspaceView() re-runs on every state change (voice, reconnect, ...)
+// and rebuilding the canvas each time wiped whatever was drawn on it.
+let boardEl = null;
+let resizeBound = false;
+
 export function boardPanel() {
+  if (boardEl) {
+    // canvas size is 0 while detached, so re-measure once it's back in the dom
+    requestAnimationFrame(fit);
+    return boardEl;
+  }
+
   canvas = h('canvas');
   ctx = null;
 
   const wrap = h('div', { class: 'board-wrap' }, canvas);
+  boardEl = wrap;
   const zoomLabel = h('span', { class: 'zoom-label mono' }, '100%');
 
   requestAnimationFrame(() => {
     ctx = canvas.getContext('2d');
     fit();
   });
-  window.addEventListener('resize', fit);
+  if (!resizeBound) {
+    window.addEventListener('resize', () => fit());
+    resizeBound = true;
+  }
 
   function setZoom(next, cx, cy) {
     const z = Math.min(Math.max(next, MIN_ZOOM), MAX_ZOOM);

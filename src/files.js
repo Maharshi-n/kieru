@@ -16,6 +16,8 @@ export function resetFiles() {
   for (const x of xfers.values()) x.abort?.();
   xfers.clear();
   if (listEl) clear(listEl);
+  filesEl = null;
+  listEl = null;
 }
 
 function upsert(id, patch) {
@@ -187,7 +189,10 @@ function drain(dc) {
   });
 }
 
+let filesEl = null;
+
 export function filesPanel() {
+  if (filesEl) return filesEl;
   listEl = h('div', {});
 
   const drop = h('div', { class: 'drop' },
@@ -210,7 +215,7 @@ export function filesPanel() {
 
   renderList();
 
-  return h('div', { style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } },
+  filesEl = h('div', { style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } },
     drop,
     picker,
     session.type === 'relay'
@@ -219,4 +224,5 @@ export function filesPanel() {
       : null,
     h('div', { style: { flex: '1', overflowY: 'auto' } }, listEl)
   );
+  return filesEl;
 }
