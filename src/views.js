@@ -258,7 +258,40 @@ export function workspaceView() {
     );
   }
 
-  return h('div', { class: 'ws' }, main, chatPanel());
+  const side = chatPanel();
+  side.style.width = sideWidth + 'px';
+
+  return h('div', { class: 'ws' }, main, resizeGrip(side), side);
+}
+
+// drag the divider to resize the chat panel. width survives redraws.
+let sideWidth = 320;
+
+function resizeGrip(side) {
+  const grip = h('div', { class: 'ws-grip' });
+
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add('dragging');
+    const startX = e.clientX;
+    const startW = side.offsetWidth;
+
+    const move = (ev) => {
+      const w = Math.min(Math.max(startW - (ev.clientX - startX), 240), window.innerWidth - 320);
+      sideWidth = w;
+      side.style.width = w + 'px';
+    };
+    const up = () => {
+      grip.classList.remove('dragging');
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+  });
+
+  return grip;
 }
 
 export function sessionBar() {

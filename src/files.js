@@ -190,8 +190,13 @@ function drain(dc) {
 export function filesPanel() {
   listEl = h('div', {});
 
-  const drop = h('div', { class: 'drop' }, 'Drop a file here, or click to pick');
-  const picker = h('input', { type: 'file', style: { display: 'none' },
+  const drop = h('div', { class: 'drop' },
+    icon(ICONS.upload, 22, 'var(--files)'),
+    h('div', { class: 'drop-main' }, 'Choose a file'),
+    h('div', { class: 'drop-sub' }, 'or drag and drop it here'),
+    h('button', { class: 'btn drop-btn' }, 'Browse files')
+  );
+  const picker = h('input', { type: 'file', multiple: true, style: { display: 'none' },
     onChange: (e) => { for (const f of e.target.files) sendFile(f); e.target.value = ''; } });
 
   drop.addEventListener('click', () => picker.click());
