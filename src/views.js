@@ -215,7 +215,13 @@ function screenPanel() {
   const empty = h('div', { class: 'screen-empty' },
     sending ? 'Sharing your screen.' : 'Nothing shared yet.');
 
+  // screen share is the heaviest thing here, worth saying so before they start
+  const relayWarn = session.type === 'relay'
+    ? h('div', { class: 'relay-warn' }, 'Relayed connection — screen sharing uses a lot of relay data, keep it short')
+    : null;
+
   return h('div', { class: 'screen-wrap' },
+    relayWarn,
     h('div', { class: 'screen-stage' }, screen.receiving ? video : empty),
     bar
   );

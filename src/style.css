@@ -364,6 +364,12 @@ input, textarea, select { font-family: var(--ui); }
 .bar { height: 3px; background: var(--bd); border-radius: 2px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--files); transition: width .15s; }
 
+.relay-warn {
+  margin: 0 12px 8px; padding: 7px 10px;
+  background: rgba(217,162,95,.09); border: 1px solid rgba(217,162,95,.28);
+  border-radius: 7px; font-size: 11px; color: var(--amber); line-height: 1.45;
+}
+
 /* screen share */
 .screen-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .screen-stage {

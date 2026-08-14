@@ -7,7 +7,9 @@ import { getPeer } from './peer.js';
 const CHUNK = 16 * 1024;
 const HIGH_WATER = 1024 * 1024;
 const LOW_WATER = 256 * 1024;
-const RELAY_CAP = 200 * 1024 * 1024;
+// relayed bytes come out of a metered TURN quota, so keep transfers small there.
+// direct connections cost nothing and stay uncapped.
+const RELAY_CAP = 10 * 1024 * 1024;
 
 const xfers = new Map();
 let listEl = null;
@@ -56,7 +58,7 @@ function transferLabel(fileId) { return `xfer:${fileId}`; }
 export function sendFile(file) {
   if (!session.conn?.open) return;
   if (session.type === 'relay' && file.size > RELAY_CAP) {
-    toast(`Relayed connection: files capped at ${fmtBytes(RELAY_CAP)}`, 'err');
+    toast(`This connection is relayed through a TURN server, so files are capped at ${fmtBytes(RELAY_CAP)}. "${file.name}" is ${fmtBytes(file.size)}.`, 'err');
     return;
   }
   const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -219,7 +221,7 @@ export function filesPanel() {
     drop,
     picker,
     session.type === 'relay'
-      ? h('div', { class: 'xfer-meta', style: { padding: '0 12px 8px' } },
+      ? h('div', { class: 'relay-warn' },
           `Relayed connection — files capped at ${fmtBytes(RELAY_CAP)}`)
       : null,
     h('div', { style: { flex: '1', overflowY: 'auto' } }, listEl)

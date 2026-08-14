@@ -21,9 +21,13 @@ function attach() {
 export async function startShare() {
   if (screen.state !== 'idle' || !session.conn?.open) return;
   let stream;
+  const relayed = session.type === 'relay';
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 15, max: 30 } },
+      // relayed frames cost turn quota, so ask for less of them
+      video: relayed
+        ? { frameRate: { ideal: 5, max: 10 }, width: { max: 1280 } }
+        : { frameRate: { ideal: 15, max: 30 } },
       audio: false,
     });
   } catch (e) {
@@ -38,6 +42,16 @@ export async function startShare() {
   stream.getVideoTracks()[0].addEventListener('ended', stopShare);
 
   screen.call = getPeer().call(session.conn.peer, stream, { metadata: { kind: 'screen' } });
+
+  // frameRate alone is a hint; the encoder bitrate is what actually bounds the bytes
+  setTimeout(() => {
+    const sender = screen.call?.peerConnection?.getSenders().find((s) => s.track?.kind === 'video');
+    if (!sender) return;
+    const params = sender.getParameters();
+    params.encodings = params.encodings?.length ? params.encodings : [{}];
+    params.encodings[0].maxBitrate = relayed ? 300_000 : 1_500_000;
+    sender.setParameters(params).catch((e) => console.warn('[screen] bitrate cap failed', e));
+  }, 1000);
   screen.call.on('close', () => { if (screen.state === 'sending') stopShare(); });
   screen.call.on('error', (e) => { console.error('[screen] call error', e); stopShare(); });
 }
