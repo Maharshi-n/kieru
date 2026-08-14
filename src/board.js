@@ -394,7 +394,7 @@ function addImage(file) {
         strokeId: it.id, data, x: it.x, y: it.y, w: it.w, h: it.h,
       });
     };
-    probe.src = data;
+    probe.src = String(reader.result);
   };
   reader.readAsDataURL(file);
 }
@@ -807,8 +807,7 @@ export function boardPanel() {
         class: 'btn-icon', title: 'Reset view', style: { width: 'auto', padding: '0 8px', fontSize: '11px' },
         onClick: () => { view = { x: 0, y: 0, zoom: 1 }; zoomLabel.textContent = '100%'; redraw(); },
       }, 'Reset')
-    ),
-    h('div', { class: 'board-hint' }, 'Drag text to move it · pull its corners to resize · Ctrl+drag to pan the board')
+    )
   );
 
   canvas.style.cursor = 'crosshair';

@@ -188,6 +188,20 @@ app.post('/heartbeat', auth, limit('beat', 120, 60 * 1000), wrap(async (req, res
   res.json({ ok: true });
 }));
 
+app.get('/share/quota', auth, limit('quota', 60, 60 * 1000), wrap(async (req, res) => {
+  const used = await store.shareUsed(req.uid);
+  res.json({ used, budget: store.SHARE_BUDGET });
+}));
+
+// the client ticks this every few seconds while sharing over turn. it is not
+// trusted for accuracy, only to stop an honest client from running for hours.
+app.post('/share/tick', auth, limit('tick', 120, 60 * 1000), wrap(async (req, res) => {
+  const secs = Number(req.body?.seconds);
+  if (!Number.isFinite(secs) || secs < 1 || secs > 30) return res.status(400).json({ error: 'bad seconds' });
+  const used = await store.addShareSeconds(req.uid, Math.round(secs));
+  res.json({ used, budget: store.SHARE_BUDGET, exhausted: used >= store.SHARE_BUDGET });
+}));
+
 // sendBeacon can't set headers, so accept the token in the body too.
 app.delete('/presence', wrap(async (req, res) => {
   const header = req.get('authorization') || '';

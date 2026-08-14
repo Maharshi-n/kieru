@@ -2,7 +2,7 @@ import { q, migrate } from './db.js';
 
 export const usingMemory = !process.env.DB_HOST;
 
-const mem = { users: [], friendships: [], presence: new Map(), seq: 1 };
+const mem = { users: [], friendships: [], presence: new Map(), quota: new Map(), seq: 1 };
 
 export async function init() {
   if (usingMemory) return;
@@ -166,4 +166,35 @@ export async function clearPresence(userId) {
     return;
   }
   await q(`DELETE FROM presence WHERE user_id=?`, [userId]);
+}
+
+export const SHARE_BUDGET = 20;
+
+const utcDay = () => new Date().toISOString().slice(0, 10);
+
+export async function shareUsed(userId) {
+  if (usingMemory) {
+    const row = mem.quota.get(userId);
+    return row?.day === utcDay() ? row.seconds : 0;
+  }
+  const rows = await q(`SELECT seconds_used FROM share_quota WHERE user_id=? AND day=?`, [userId, utcDay()]);
+  return rows[0] ? Number(rows[0].seconds_used) : 0;
+}
+
+// returns what the total is after adding, so the caller never has to read back
+export async function addShareSeconds(userId, seconds) {
+  const day = utcDay();
+  if (usingMemory) {
+    const row = mem.quota.get(userId);
+    const base = row?.day === day ? row.seconds : 0;
+    const total = Math.min(base + seconds, SHARE_BUDGET);
+    mem.quota.set(userId, { day, seconds: total });
+    return total;
+  }
+  await q(
+    `INSERT INTO share_quota (user_id, day, seconds_used) VALUES (?,?,?)
+     ON DUPLICATE KEY UPDATE seconds_used = LEAST(seconds_used + VALUES(seconds_used), ?)`,
+    [userId, day, seconds, SHARE_BUDGET]
+  );
+  return shareUsed(userId);
 }

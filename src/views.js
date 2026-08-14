@@ -5,7 +5,7 @@ import { chatPanel } from './chat.js';
 import { boardPanel } from './board.js';
 import { filesPanel } from './files.js';
 import { voice, startCall, hangup, toggleMute } from './voice.js';
-import { screen, startShare, stopShare, setVideoEl } from './screen.js';
+import { screen, startShare, stopShare, setVideoEl, quota, loadQuota } from './screen.js';
 
 export function loginView({ googleClientId, devLogin, onDone }) {
   const card = h('div', { class: 'login-card' },
@@ -204,20 +204,30 @@ function screenPanel() {
   const video = h('video', { autoplay: true, playsinline: true, muted: true, class: 'screen-video' });
   setVideoEl(video);
 
+  const relayed = session.type === 'relay';
+  if (relayed && !quota.known) loadQuota();
+  const spent = relayed && quota.known && quota.left <= 0;
+
   const sending = screen.state === 'sending';
   const bar = h('div', { class: 'screen-bar' },
     sending
       ? h('button', { class: 'btn-danger', onClick: stopShare }, icon(ICONS.x, 15), 'Stop sharing')
-      : h('button', { class: 'btn-ghost', onClick: startShare }, icon(ICONS.screen, 15), 'Share my screen'),
-    sending ? h('span', { class: 'xfer-meta' }, 'They can see your screen') : null
+      : h('button', { class: 'btn-ghost', disabled: spent, onClick: startShare }, icon(ICONS.screen, 15), 'Share my screen'),
+    sending ? h('span', { class: 'xfer-meta' }, 'They can see your screen') : null,
+    relayed && quota.known
+      ? h('span', { class: 'xfer-meta', style: { marginLeft: 'auto' } }, `${quota.left}s left today`)
+      : null
   );
 
   const empty = h('div', { class: 'screen-empty' },
     sending ? 'Sharing your screen.' : 'Nothing shared yet.');
 
   // screen share is the heaviest thing here, worth saying so before they start
-  const relayWarn = session.type === 'relay'
-    ? h('div', { class: 'relay-warn' }, 'Relayed connection — screen sharing uses a lot of relay data, keep it short')
+  const relayWarn = relayed
+    ? h('div', { class: 'relay-warn' },
+        spent
+          ? 'You have used your daily screen share time. It resets tomorrow.'
+          : `Relayed connection, screen sharing is limited to ${quota.budget} seconds per day`)
     : null;
 
   return h('div', { class: 'screen-wrap' },

@@ -59,6 +59,16 @@ const SCHEMA = [
     last_heartbeat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_beat (last_heartbeat)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci`,
+
+  // relayed screen share burns metered turn quota, so it gets a daily budget.
+  // day is a plain YYYY-MM-DD in utc, which makes the reset a key change
+  // rather than something that has to be swept.
+  `CREATE TABLE IF NOT EXISTS share_quota (
+    user_id BIGINT UNSIGNED NOT NULL,
+    day CHAR(10) NOT NULL,
+    seconds_used INT UNSIGNED NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci`,
 ];
 
 export async function migrate() {
@@ -67,4 +77,5 @@ export async function migrate() {
 
 export async function sweepPresence() {
   await q(`DELETE FROM presence WHERE last_heartbeat < (NOW() - INTERVAL 1 DAY)`);
+  await q(`DELETE FROM share_quota WHERE day < DATE_FORMAT(UTC_DATE() - INTERVAL 3 DAY, '%Y-%m-%d')`);
 }

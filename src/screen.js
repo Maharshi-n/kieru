@@ -1,9 +1,63 @@
 import { getPeer } from './peer.js';
 import { session, changed, on } from './session.js';
 import { toast } from './ui.js';
+import * as api from './api.js';
 
 // separate connection from voice so sharing never renegotiates the audio call
 export const screen = { sending: null, receiving: null, call: null, state: 'idle' };
+
+// relayed sharing is metered, so every user gets a small daily budget. the
+// server holds the real count; this is just what we last heard from it.
+export const quota = { used: 0, budget: 20, left: 20, known: false };
+let tickTimer = null;
+
+export async function loadQuota() {
+  try {
+    const { used, budget } = await api.get('/share/quota');
+    quota.used = used;
+    quota.budget = budget;
+    quota.left = Math.max(0, budget - used);
+    quota.known = true;
+    changed();
+  } catch {}
+}
+
+const TICK_MS = 5000;
+
+function startMetering() {
+  const spend = async (seconds) => {
+    try {
+      const r = await api.post('/share/tick', { seconds });
+      quota.used = r.used;
+      quota.budget = r.budget;
+      quota.left = Math.max(0, r.budget - r.used);
+      quota.known = true;
+      if (r.exhausted) {
+        stopShare();
+        toast('Daily screen share limit reached. It resets tomorrow.', 'err');
+      }
+      changed();
+    } catch {}
+  };
+
+  let elapsed = 0;
+  const started = Date.now();
+  tickTimer = setInterval(() => {
+    const total = Math.floor((Date.now() - started) / 1000);
+    const chunk = total - elapsed;
+    if (chunk < 1) return;
+    elapsed = total;
+    // stop locally the moment the budget runs out instead of waiting for the
+    // round trip, otherwise a slow reply leaks seconds
+    if (total >= quota.left) { stopShare(); toast('Daily screen share limit reached. It resets tomorrow.', 'err'); }
+    spend(chunk);
+  }, TICK_MS);
+}
+
+function stopMetering() {
+  clearInterval(tickTimer);
+  tickTimer = null;
+}
 
 let videoEl = null;
 
@@ -22,6 +76,15 @@ export async function startShare() {
   if (screen.state !== 'idle' || !session.conn?.open) return;
   let stream;
   const relayed = session.type === 'relay';
+
+  if (relayed) {
+    await loadQuota();
+    if (quota.known && quota.left <= 0) {
+      toast('You have used your daily screen share time. It resets tomorrow.', 'err');
+      return;
+    }
+  }
+
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
       // relayed frames cost turn quota, so ask for less of them
@@ -37,6 +100,7 @@ export async function startShare() {
 
   screen.sending = stream;
   screen.state = 'sending';
+  if (relayed) startMetering();
   changed();
 
   stream.getVideoTracks()[0].addEventListener('ended', stopShare);
@@ -57,6 +121,7 @@ export async function startShare() {
 }
 
 export function stopShare() {
+  stopMetering();
   screen.sending?.getTracks().forEach((t) => t.stop());
   if (screen.call && screen.state === 'sending') { try { screen.call.close(); } catch {} }
   screen.sending = null;

@@ -222,7 +222,7 @@ export function filesPanel() {
     picker,
     session.type === 'relay'
       ? h('div', { class: 'relay-warn' },
-          `Relayed connection — files capped at ${fmtBytes(RELAY_CAP)}`)
+          `Relayed connection, files capped at ${fmtBytes(RELAY_CAP)}`)
       : null,
     h('div', { style: { flex: '1', overflowY: 'auto' } }, listEl)
   );
