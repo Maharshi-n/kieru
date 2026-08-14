@@ -11,9 +11,10 @@ const b = await store.upsertUser({ sub: 'dev:b', name: 'Bob', email: 'b@x.com' }
 const a2 = await store.upsertUser({ sub: 'dev:a', name: 'Ann', email: 'a@x.com' });
 assert.equal(a.id, a2.id, 'same sub must not create a second user');
 
-assert.equal((await store.findUserByEmailOrName('b@x.com')).id, b.id);
-assert.equal((await store.findUserByEmailOrName('Ann')).id, a.id);
-assert.equal(await store.findUserByEmailOrName('nobody'), null);
+assert.equal((await store.findUserByEmail('b@x.com')).id, b.id);
+assert.equal((await store.findUserByEmail('B@X.com')).id, b.id, 'lookup is case insensitive');
+assert.equal(await store.findUserByEmail('Ann'), null, 'names are not handles');
+assert.equal(await store.findUserByEmail('nobody@x.com'), null);
 
 // pending request shows up for the addressee only
 const fr = await store.createFriendRequest(a.id, b.id);

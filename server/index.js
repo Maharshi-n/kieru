@@ -164,9 +164,9 @@ app.get('/friends/pending', auth, wrap(async (req, res) => {
 }));
 
 app.post('/friends/request', auth, limit('friend-req', 20, 60 * 60 * 1000), wrap(async (req, res) => {
-  const handle = String(req.body?.handle || '').trim();
-  if (handle.length < 2 || handle.length > 255) return res.status(400).json({ error: 'handle required' });
-  const target = await store.findUserByEmailOrName(handle);
+  const email = String(req.body?.email || '').trim();
+  if (email.length > 190 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'email required' });
+  const target = await store.findUserByEmail(email);
   if (target && target.id !== req.uid) await store.createFriendRequest(req.uid, target.id);
   // same answer either way, or this becomes a way to check if an email has an account
   res.json({ ok: true });

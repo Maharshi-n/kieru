@@ -129,13 +129,14 @@ let addRow = null;
 let addInput = null;
 
 function buildAddRow() {
-  addInput = h('input', { class: 'field add-field', placeholder: 'Add someone by name or email' });
+  addInput = h('input', { class: 'field add-field', type: 'email', placeholder: 'Add someone by their email' });
 
   const submit = async () => {
     const v = addInput.value.trim();
     if (!v) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return toast('Enter a valid email address', 'err');
     try {
-      await api.post('/friends/request', { handle: v });
+      await api.post('/friends/request', { email: v });
       addInput.value = '';
       toast('Request sent if that account exists');
     } catch (e) { toast(e.message, 'err'); }
@@ -174,7 +175,7 @@ export function friendsView({ friends, pending, onStart, onRefresh, onLogout, di
 
   const sec = h('div', { class: 'section' }, h('div', { class: 'label' }, `Friends (${friends.length})`));
   if (!friends.length) {
-    sec.append(h('div', { class: 'empty' }, 'No friends yet. Add someone by their name or email.'));
+    sec.append(h('div', { class: 'empty' }, 'No friends yet. Add someone by their email.'));
   }
   for (const f of friends) {
     sec.append(

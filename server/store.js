@@ -13,6 +13,7 @@ export async function init() {
 const ONLINE_SECONDS = 25;
 
 export async function upsertUser({ sub, name, email, avatar }) {
+  email = email ? email.toLowerCase() : null;
   if (usingMemory) {
     let u = mem.users.find((x) => x.google_sub === sub);
     if (!u) {
@@ -40,12 +41,14 @@ export async function getUser(id) {
   return rows[0] ?? null;
 }
 
-export async function findUserByEmailOrName(handle) {
+// email only. display names are not unique, so matching on one could add a
+// stranger who happens to share a name with the person you meant.
+export async function findUserByEmail(email) {
+  const e = email.toLowerCase();
   if (usingMemory) {
-    const h = handle.toLowerCase();
-    return mem.users.find((u) => u.email?.toLowerCase() === h || u.display_name.toLowerCase() === h) ?? null;
+    return mem.users.find((u) => u.email?.toLowerCase() === e) ?? null;
   }
-  const rows = await q(`SELECT * FROM users WHERE email=? OR display_name=? LIMIT 1`, [handle, handle]);
+  const rows = await q(`SELECT * FROM users WHERE email=? LIMIT 1`, [e]);
   return rows[0] ?? null;
 }
 
