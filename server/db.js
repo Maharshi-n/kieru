@@ -14,7 +14,6 @@ export function db() {
       connectionLimit: 3,
       queueLimit: 0,
       enableKeepAlive: false,
-      // hostinger often defaults to latin1, which mangles accents and emoji
       charset: 'utf8mb4_general_ci',
       connectTimeout: 10000,
       timezone: 'Z',
@@ -28,7 +27,6 @@ export async function q(sql, params = []) {
   return rows;
 }
 
-// no foreign keys on purpose, not every hostinger plan supports them
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS users (
     id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
@@ -60,19 +58,32 @@ const SCHEMA = [
     KEY idx_beat (last_heartbeat)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci`,
 
-  // relayed screen share burns metered turn quota, so it gets a daily budget.
-  // day is a plain YYYY-MM-DD in utc, which makes the reset a key change
-  // rather than something that has to be swept.
+  // day is a plain YYYY-MM-DD in utc, so the daily reset is a key change
+  // rather than something that has to be swept
   `CREATE TABLE IF NOT EXISTS share_quota (
     user_id BIGINT UNSIGNED NOT NULL,
     day CHAR(10) NOT NULL,
     seconds_used INT UNSIGNED NOT NULL DEFAULT 0,
+    file_bytes_used BIGINT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci`,
 ];
 
+// file_bytes_used landed after share_quota shipped. mysql has no portable
+// ADD COLUMN IF NOT EXISTS, so look first.
+async function addMissingColumns() {
+  const rows = await q(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'share_quota' AND column_name = 'file_bytes_used'`
+  );
+  if (!rows.length) {
+    await q(`ALTER TABLE share_quota ADD COLUMN file_bytes_used BIGINT UNSIGNED NOT NULL DEFAULT 0`);
+  }
+}
+
 export async function migrate() {
   for (const sql of SCHEMA) await q(sql);
+  await addMissingColumns();
 }
 
 export async function sweepPresence() {

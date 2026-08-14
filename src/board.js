@@ -6,17 +6,15 @@ const COLORS = ['#ececee', '#6f9fd8', '#a78bdb', '#8fbf7f', '#d9a25f', '#d87f8b'
 const WIDTHS = [2, 4, 8];
 const MIN_TEXT = 8;
 const MAX_TEXT = 400;
-const HANDLE = 7;        // corner box, screen px
-// images go as one base64 message on the same channel as chat, so a huge one
-// stalls everything behind it. downscale past this instead of sending it raw.
+const HANDLE = 7;
+// images ride the same channel as chat, so a huge one stalls everything behind it
 const MAX_IMAGE = 8 * 1024 * 1024;
 const MAX_DIM = 1600;
 const BATCH_MS = 45;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 5;
 
-// world coordinates, not screen. the canvas is an infinite plane and pan/zoom
-// only change how we look at it, so both sides stay in sync at any zoom.
+// world coordinates, not screen, so both sides stay in sync at any zoom
 let items = [];
 let canvas = null, ctx = null;
 let color = COLORS[0], width = WIDTHS[0];
@@ -34,7 +32,6 @@ let flushTimer = null;
 let panning = null;
 let textInput = null;
 
-// id -> decoded <img>. images live only as long as the session does.
 const imgCache = new Map();
 
 function loadImage(id, dataUrl, onReady) {
@@ -72,7 +69,7 @@ function toWorld(e) {
 function fit() {
   if (!canvas) return;
   const r = canvas.getBoundingClientRect();
-  if (!r.width || !r.height) return;   // detached or hidden, nothing to size to
+  if (!r.width || !r.height) return;
 
   const w = Math.round(r.width * dpr());
   const h = Math.round(r.height * dpr());
@@ -89,8 +86,7 @@ function redraw() {
   if (!ctx || !canvas) return;
   const r = canvas.getBoundingClientRect();
   if (!r.width) return;
-  // derive the scale from the backing store rather than reading dpr() again, or
-  // the transform and the actual canvas size can disagree and clicks land off-target
+  // from the backing store, not dpr() again, or clicks land off-target
   const d = canvas.width / r.width;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -101,8 +97,6 @@ function redraw() {
   if (drawing) paint(drawing);
 }
 
-// dotted box with four corner handles. drawn in world units scaled by zoom so it
-// stays a constant thickness on screen.
 function drawSelection(it) {
   const z = view.zoom;
   const pad = 4 / z;
@@ -135,21 +129,17 @@ function corners(it) {
   return [[x, y], [x + w, y], [x, y + hh], [x + w, y + hh]];
 }
 
-// single source of truth for the cursor, so releasing the mouse never forgets
-// that ctrl is still held
 function idleCursor() {
-  if (ctrlHeld) return 'grab';        // ctrl pans the board
+  if (ctrlHeld) return 'grab';
   return tool === 'pan' ? 'grab' : 'crosshair';
 }
 
-// the corner opposite the one being dragged stays put while resizing
 function anchorFor(it, corner) {
   const cs = corners(it);
   const opposite = [3, 2, 1, 0][corner];
   return { x: cs[opposite][0], y: cs[opposite][1], corner };
 }
 
-// measure without waiting for a paint, so text is clickable the moment it exists
 function measure(it) {
   if (!ctx) return;
   const size = it.size || 16;
@@ -161,7 +151,6 @@ function measure(it) {
   ctx.restore();
 }
 
-// which corner is under the cursor, if any
 function handleAt(world) {
   if (!selected || selected.w == null) return -1;
   const r = (HANDLE + 3) / view.zoom;
@@ -172,7 +161,6 @@ function handleAt(world) {
   return -1;
 }
 
-// dots stay put in world space so panning feels like moving over a surface
 function grid() {
   const step = 40;
   const r = canvas.getBoundingClientRect();
@@ -204,7 +192,6 @@ function paint(it) {
     ctx.font = `${size}px 'Instrument Sans', sans-serif`;
     ctx.textBaseline = 'top';
     ctx.fillText(it.text, it.x, it.y);
-    // remember the box so pointer hits can find this text later
     it.w = ctx.measureText(it.text).width;
     it.h = size * 1.25;
     if (it === selected) drawSelection(it);
@@ -348,7 +335,6 @@ on('wb-undo', (p) => {
 
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-// re-encode anything oversized so a single message can't clog the channel
 function shrink(img, original, mime) {
   const big = Math.max(img.naturalWidth, img.naturalHeight);
   if (big <= MAX_DIM && original.length < 1.5 * 1024 * 1024) return original;
@@ -362,7 +348,6 @@ function shrink(img, original, mime) {
   return c.toDataURL(mime === 'image/png' ? 'image/png' : 'image/jpeg', 0.82);
 }
 
-// drops an image at the centre of whatever you're currently looking at
 function addImage(file) {
   if (!file.type.startsWith('image/')) return;
   if (file.size > MAX_IMAGE) {
@@ -375,7 +360,6 @@ function addImage(file) {
     probe.onload = () => {
       const data = shrink(probe, String(reader.result), file.type);
       const r = canvas.getBoundingClientRect();
-      // fit inside roughly half the viewport so it lands at a usable size
       const maxW = (r.width / view.zoom) * 0.5;
       const maxH = (r.height / view.zoom) * 0.5;
       const scale = Math.min(maxW / probe.naturalWidth, maxH / probe.naturalHeight, 1);
@@ -399,7 +383,6 @@ function addImage(file) {
   reader.readAsDataURL(file);
 }
 
-// topmost text under the cursor. w/h are filled in by paint().
 function textAt(w) {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
@@ -439,8 +422,7 @@ function commitText(world) {
     },
   });
 
-  // removing the input fires blur, which would re-enter done() and throw on the
-  // null textInput before the send ever happened
+  // removing the input fires blur, which would re-enter done()
   let finished = false;
   const done = (save) => {
     if (finished) return;
@@ -469,8 +451,8 @@ function commitText(world) {
   setTimeout(() => textInput?.focus(), 0);
 }
 
-// built once. workspaceView() re-runs on every state change (voice, reconnect, ...)
-// and rebuilding the canvas each time wiped whatever was drawn on it.
+// built once. workspaceView() re-runs on every state change and rebuilding
+// the canvas each time wiped whatever was drawn on it.
 let boardEl = null;
 let resizeBound = false;
 
@@ -492,13 +474,11 @@ export function boardPanel() {
     ctx = canvas.getContext('2d');
     fit();
   });
-  // the window resize event misses the chat divider being dragged, which changes
-  // the canvas size without the window changing. observe the element itself.
+  // window resize misses the chat divider being dragged, so watch the element too
   if (!resizeBound) {
     window.addEventListener('resize', () => fit());
     new ResizeObserver(() => fit()).observe(canvas);
 
-    // hold ctrl to move text with any tool selected
     const setCtrl = (e) => {
       const now = e.ctrlKey || e.metaKey;
       if (now === ctrlHeld) return;
@@ -541,7 +521,6 @@ export function boardPanel() {
     const r = canvas.getBoundingClientRect();
     const px = cx ?? r.width / 2;
     const py = cy ?? r.height / 2;
-    // keep the point under the cursor fixed while zooming
     view.x = px - (px - view.x) * (z / view.zoom);
     view.y = py - (py - view.y) * (z / view.zoom);
     view.zoom = z;
@@ -565,7 +544,6 @@ export function boardPanel() {
     if (textInput) return;
     canvas.setPointerCapture(e.pointerId);
 
-    // ctrl, middle mouse, shift, or the hand tool all pan the board
     if (e.button === 1 || tool === 'pan' || e.shiftKey || e.ctrlKey || e.metaKey) {
       panning = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
       canvas.style.cursor = 'grabbing';
@@ -574,7 +552,6 @@ export function boardPanel() {
 
     const w = toWorld(e);
 
-    // corner of the selected text starts a resize
     const corner = handleAt(w);
     if (corner !== -1) {
       resizing = {
@@ -587,7 +564,6 @@ export function boardPanel() {
       return;
     }
 
-    // pressing anywhere inside text selects it and starts moving it
     const hit = textAt(w);
     if (hit) {
       selected = hit;
@@ -617,7 +593,6 @@ export function boardPanel() {
       const w = toWorld(e);
       const it = resizing.item;
       const a = resizing.anchor;
-      // scale by how far the cursor is from the anchor vs where it started
       const was = Math.hypot(resizing.start.x - a.x, resizing.start.y - a.y);
       const now = Math.hypot(w.x - a.x, w.y - a.y);
       if (was > 0.01) {
@@ -629,7 +604,6 @@ export function boardPanel() {
           it.size = Math.min(Math.max(resizing.startSize * k, MIN_TEXT), MAX_TEXT);
           measure(it);
         }
-        // keep the anchor corner pinned as the box grows
         if (a.corner === 0) { it.x = a.x - it.w; it.y = a.y - it.h; }
         else if (a.corner === 1) { it.y = a.y - it.h; }
         else if (a.corner === 2) { it.x = a.x - it.w; }
@@ -663,7 +637,6 @@ export function boardPanel() {
       drawing.points.push([w.x, w.y]);
       queue([w.x, w.y]);
     } else {
-      // shapes are just two corners, keep replacing the second
       drawing.points[1] = [w.x, w.y];
     }
     redraw();

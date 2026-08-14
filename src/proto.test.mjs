@@ -1,7 +1,6 @@
-// checks the wire protocol handling in isolation: stroke merge, undo scoping, backpressure
 import assert from 'node:assert';
 
-// --- stroke merge (mirrors board.js on('wb-stroke')) ---
+// mirrors board.js on('wb-stroke')
 let strokes = [];
 function onStroke(p) {
   if (!p?.strokeId || !Array.isArray(p.points)) return;
@@ -26,7 +25,7 @@ onStroke({ strokeId: 'c', points: [[0.5, 0.5]] });
 strokes = strokes.filter((s) => s.id !== 'a');
 assert.deepEqual(strokes.map((s) => s.id), ['c']);
 
-// --- undo scoping (mirrors board.js undoMine) ---
+// mirrors board.js undoMine
 const mixed = [
   { id: '1', mine: true }, { id: '2', mine: false }, { id: '3', mine: true }, { id: '4', mine: false },
 ];
@@ -39,7 +38,7 @@ assert.equal(undoMine(mixed).id, '1', 'then the next most recent of mine');
 assert.equal(undoMine(mixed), null, 'must never undo the peer\'s strokes');
 assert.deepEqual(mixed.map((s) => s.id), ['2', '4']);
 
-// --- chunking + backpressure (mirrors files.js pump/drain) ---
+// mirrors files.js pump/drain
 const CHUNK = 16 * 1024, HIGH = 1024 * 1024, LOW = 256 * 1024;
 const size = CHUNK * 200 + 7;           // deliberately not chunk-aligned
 let buffered = 0, sent = 0, waits = 0, maxBuffered = 0;
@@ -55,14 +54,12 @@ assert.equal(sent, size, 'every byte must be sent exactly once, incl. the partia
 assert.ok(waits > 0, 'backpressure must actually engage on a large file');
 assert.ok(maxBuffered < HIGH + CHUNK, `buffer must stay bounded, peaked at ${maxBuffered}`);
 
-// --- relay cap ---
 const RELAY_CAP = 200 * 1024 * 1024;
 const allowed = (type, bytes) => !(type === 'relay' && bytes > RELAY_CAP);
 assert.equal(allowed('relay', RELAY_CAP + 1), false);
 assert.equal(allowed('relay', RELAY_CAP), true, 'cap is inclusive');
 assert.equal(allowed('direct', RELAY_CAP * 10), true, 'no cap on direct');
 
-// --- chat cap ---
 const MAX_LEN = 4000;
 assert.equal('x'.repeat(5000).slice(0, MAX_LEN).length, MAX_LEN, 'oversize peer text must be truncated');
 

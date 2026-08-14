@@ -1,5 +1,3 @@
-// in dev the api is a separate process behind the vite proxy at /api.
-// in production express serves this bundle itself, so the api is same-origin.
 export const API = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '/api' : '');
 
 const TURN_USER = import.meta.env.VITE_OPENRELAY_USERNAME || '';

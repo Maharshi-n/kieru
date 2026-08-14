@@ -36,7 +36,6 @@ if (!JWT_SECRET) {
   console.warn('[warn] JWT_SECRET unset — generated a random one. Logins reset on restart.');
 }
 
-// dev login bypasses google entirely, so it must never be on by default in prod
 const ALLOW_DEV_LOGIN = PROD
   ? process.env.ALLOW_DEV_LOGIN === '1'
   : process.env.ALLOW_DEV_LOGIN !== '0';
@@ -103,7 +102,6 @@ function auth(req, res, next) {
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
   console.error(`[500] ${req.method} ${req.path}:`, e.code || '', e.sqlMessage || e.message);
-  // missing tables is the usual first-deploy failure, so say so plainly
   if (e.code === 'ER_NO_SUCH_TABLE') {
     return res.status(500).json({ error: 'database not set up — run node server/setup-db.js' });
   }
@@ -193,8 +191,6 @@ app.get('/share/quota', auth, limit('quota', 60, 60 * 1000), wrap(async (req, re
   res.json({ used, budget: store.SHARE_BUDGET });
 }));
 
-// the client ticks this every few seconds while sharing over turn. it is not
-// trusted for accuracy, only to stop an honest client from running for hours.
 app.post('/share/tick', auth, limit('tick', 120, 60 * 1000), wrap(async (req, res) => {
   const secs = Number(req.body?.seconds);
   if (!Number.isFinite(secs) || secs < 1 || secs > 30) return res.status(400).json({ error: 'bad seconds' });
@@ -202,16 +198,38 @@ app.post('/share/tick', auth, limit('tick', 120, 60 * 1000), wrap(async (req, re
   res.json({ used, budget: store.SHARE_BUDGET, exhausted: used >= store.SHARE_BUDGET });
 }));
 
-// sendBeacon can't set headers, so accept the token in the body too.
+app.get('/files/quota', auth, limit('fquota', 60, 60 * 1000), wrap(async (req, res) => {
+  const used = await store.fileBytesUsed(req.uid);
+  res.json({ used, budget: store.FILE_BUDGET });
+}));
+
+// claimed before the offer goes out, so the sender can't start more than the
+// day's allowance at once. the peer never gets asked if there is no room.
+app.post('/files/reserve', auth, limit('freserve', 60, 60 * 1000), wrap(async (req, res) => {
+  const bytes = Number(req.body?.bytes);
+  if (!Number.isInteger(bytes) || bytes < 1 || bytes > store.FILE_BUDGET) {
+    return res.status(400).json({ error: 'bad bytes' });
+  }
+  const { ok, used } = await store.reserveFileBytes(req.uid, bytes);
+  res.json({ ok, used, budget: store.FILE_BUDGET });
+}));
+
+app.post('/files/refund', auth, limit('frefund', 60, 60 * 1000), wrap(async (req, res) => {
+  const bytes = Number(req.body?.bytes);
+  if (!Number.isInteger(bytes) || bytes < 1 || bytes > store.FILE_BUDGET) {
+    return res.status(400).json({ error: 'bad bytes' });
+  }
+  await store.refundFileBytes(req.uid, bytes);
+  res.json({ ok: true });
+}));
+
 app.delete('/presence', wrap(async (req, res) => {
   const header = req.get('authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : req.body?.token;
   try {
     const { uid } = jwt.verify(String(token || ''), JWT_SECRET);
     await store.clearPresence(uid);
-  } catch {
-    /* best-effort on tab close — never surface an error */
-  }
+  } catch {}
   res.json({ ok: true });
 }));
 
@@ -222,9 +240,7 @@ app.post('/presence/clear', express.text({ type: 'text/*' }), wrap(async (req, r
   try {
     const { uid } = jwt.verify(String(token || ''), JWT_SECRET);
     await store.clearPresence(uid);
-  } catch {
-    /* best-effort */
-  }
+  } catch {}
   res.json({ ok: true });
 }));
 
@@ -232,8 +248,6 @@ function safeJson(s) {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
 
-// serve the built frontend. api routes are all declared above, so anything that
-// reaches here is a page request and gets index.html.
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));

@@ -14,8 +14,8 @@ export function initPeer() {
   peer = new Peer({ config: iceConfig(), debug: 1 });
 
   ready = new Promise((resolve, reject) => {
-    // the public peerjs cloud has no sla. without this the app sits on
-    // "Connecting…" forever instead of telling you something is wrong.
+    // the public peerjs cloud has no sla, and without this the app sits on
+    // "Connecting…" forever
     const timer = setTimeout(() => {
       if (!peer?.open) reject(new Error('signaling server timed out'));
     }, 15000);

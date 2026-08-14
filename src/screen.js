@@ -3,11 +3,9 @@ import { session, changed, on } from './session.js';
 import { toast } from './ui.js';
 import * as api from './api.js';
 
-// separate connection from voice so sharing never renegotiates the audio call
 export const screen = { sending: null, receiving: null, call: null, state: 'idle' };
 
-// relayed sharing is metered, so every user gets a small daily budget. the
-// server holds the real count; this is just what we last heard from it.
+// the server holds the real count, this is just what we last heard from it
 export const quota = { used: 0, budget: 20, left: 20, known: false };
 let tickTimer = null;
 
@@ -47,8 +45,6 @@ function startMetering() {
     const chunk = total - elapsed;
     if (chunk < 1) return;
     elapsed = total;
-    // stop locally the moment the budget runs out instead of waiting for the
-    // round trip, otherwise a slow reply leaks seconds
     if (total >= quota.left) { stopShare(); toast('Daily screen share limit reached. It resets tomorrow.', 'err'); }
     spend(chunk);
   }, TICK_MS);
@@ -87,7 +83,6 @@ export async function startShare() {
 
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
-      // relayed frames cost turn quota, so ask for less of them
       video: relayed
         ? { frameRate: { ideal: 5, max: 10 }, width: { max: 1280 } }
         : { frameRate: { ideal: 15, max: 30 } },
@@ -107,7 +102,6 @@ export async function startShare() {
 
   screen.call = getPeer().call(session.conn.peer, stream, { metadata: { kind: 'screen' } });
 
-  // frameRate alone is a hint; the encoder bitrate is what actually bounds the bytes
   setTimeout(() => {
     const sender = screen.call?.peerConnection?.getSenders().find((s) => s.track?.kind === 'video');
     if (!sender) return;

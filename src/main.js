@@ -97,13 +97,10 @@ async function refresh() {
     state.friends = friends;
     state.pending = pending;
 
-    // only redraw when something actually changed, otherwise every poll throws
-    // away the dom for no reason
     const snapshot = JSON.stringify([friends, pending]);
     if (snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
 
-    // don't redraw mid-dial, it would replace the "Calling…" button
     if (!session.active && !state.dialing) draw();
   } catch {}
 }
@@ -119,8 +116,7 @@ function onIncomingConn(conn) {
   }
 
   conn.on('open', async () => {
-    // our cached list may not have their current peer id yet, so refresh before
-    // deciding this is a stranger. dropping it silently looked like "request not sent".
+    // our cached list may be a poll behind, so refresh before calling this a stranger
     let friend = state.friends.find((f) => f.peer_id === conn.peer);
     if (!friend) {
       const fresh = await api.get('/friends').catch(() => null);
@@ -150,8 +146,6 @@ async function startSession(friend) {
   state.dialing = friend.user_id;
   draw();
 
-  // the cached peer id can be seconds old and they may have reloaded since,
-  // so always re-fetch before dialing
   let target = friend;
   try {
     const fresh = await api.get('/friends');
@@ -171,7 +165,6 @@ async function startSession(friend) {
     return;
   }
 
-  // one retry: they may have reconnected with a new id between the fetch and the dial
   let conn = await dial(target.peer_id, 8000).catch(() => null);
   if (!conn) {
     const retry = await api.get('/friends').catch(() => null);
@@ -183,8 +176,6 @@ async function startSession(friend) {
   if (!conn) {
     state.dialing = null;
     draw();
-    // a dial that times out while they are clearly online is almost always
-    // nat traversal, which is what TURN exists to fix
     toast(HAS_TURN
       ? `Could not connect to ${friend.display_name}. Try again.`
       : `Could not connect to ${friend.display_name} — your network needs a TURN server.`, 'err');
@@ -279,8 +270,8 @@ function renderShell(content, right) {
   render(h('div', { class: 'shell' }, bar, h('div', { class: 'body-row' }, content)));
 }
 
-// re-appending a focused input loses focus and caret, so put them back.
-// without this the 10s poll makes the add-friend box impossible to type in.
+// re-appending a focused input loses focus and caret, so put them back or the
+// poll makes the add-friend box impossible to type in
 function render(node) {
   const active = document.activeElement;
   const keep = active && app.contains(active) && active.tagName === 'INPUT'
@@ -295,7 +286,6 @@ function render(node) {
   }
 }
 
-// beforeunload doesn't fire on mobile. both can run, the endpoint is idempotent.
 function goingAway() {
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);

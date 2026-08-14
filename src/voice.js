@@ -54,7 +54,6 @@ async function mic() {
 }
 
 export async function startCall() {
-  // dial the peer we're actually connected to; session.friend.peer_id goes stale on poll
   const target = session.conn?.peer;
   if (voice.state !== 'idle' || !target) return;
   const stream = await mic();

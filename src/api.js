@@ -34,7 +34,6 @@ async function req(method, path, body) {
 export const get = (p) => req('GET', p);
 export const post = (p, b) => req('POST', p, b);
 
-// tab close: sendBeacon can't set an auth header so the token rides in the body
 export function clearPresenceBeacon() {
   if (!token) return;
   navigator.sendBeacon(API + '/presence/clear', JSON.stringify({ token }));

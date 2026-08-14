@@ -1,21 +1,46 @@
 import streamSaver from 'streamsaver';
 import { h, clear, icon, ICONS, fmtBytes, toast, modal } from './ui.js';
 import { send } from './peer.js';
-import { session, on, dial } from './session.js';
+import { session, on, dial, changed } from './session.js';
 import { getPeer } from './peer.js';
+import * as api from './api.js';
 
 const CHUNK = 16 * 1024;
 const HIGH_WATER = 1024 * 1024;
 const LOW_WATER = 256 * 1024;
-// relayed bytes come out of a metered TURN quota, so keep transfers small there.
-// direct connections cost nothing and stay uncapped.
-const RELAY_CAP = 10 * 1024 * 1024;
+
+// relayed bytes come out of a metered TURN quota, so they get a daily allowance
+// spent across however many files you like. direct stays uncapped.
+export const fileQuota = { used: 0, budget: 10 * 1024 * 1024, left: 10 * 1024 * 1024, known: false };
+
+function applyQuota({ used, budget }) {
+  fileQuota.used = used;
+  fileQuota.budget = budget;
+  fileQuota.left = Math.max(0, budget - used);
+  fileQuota.known = true;
+  changed();
+}
+
+export async function loadFileQuota() {
+  try { applyQuota(await api.get('/files/quota')); } catch {}
+}
+
+async function refund(bytes) {
+  try {
+    await api.post('/files/refund', { bytes });
+    applyQuota({ used: Math.max(0, fileQuota.used - bytes), budget: fileQuota.budget });
+  } catch {}
+}
 
 const xfers = new Map();
 let listEl = null;
+const quotaEl = h('div', { class: 'relay-warn', style: { display: 'none' } });
 
 export function resetFiles() {
-  for (const x of xfers.values()) x.abort?.();
+  for (const x of xfers.values()) {
+    x.abort?.();
+    if (x.held && x.status !== 'done') refund(x.held);
+  }
   xfers.clear();
   if (listEl) clear(listEl);
   filesEl = null;
@@ -29,6 +54,7 @@ function upsert(id, patch) {
 }
 
 function renderList() {
+  paintQuota();
   if (!listEl) return;
   clear(listEl);
   for (const [id, x] of [...xfers].reverse()) {
@@ -52,18 +78,44 @@ function renderList() {
   }
 }
 
-// each transfer gets its own connection so chunks don't interleave with chat traffic
 function transferLabel(fileId) { return `xfer:${fileId}`; }
 
-export function sendFile(file) {
+export async function sendFile(file) {
   if (!session.conn?.open) return;
-  if (session.type === 'relay' && file.size > RELAY_CAP) {
-    toast(`This connection is relayed through a TURN server, so files are capped at ${fmtBytes(RELAY_CAP)}. "${file.name}" is ${fmtBytes(file.size)}.`, 'err');
-    return;
+
+  const relayed = session.type === 'relay';
+  if (relayed) {
+    if (file.size > fileQuota.budget) {
+      toast(`This connection is relayed through a TURN server, so you get ${fmtBytes(fileQuota.budget)} of transfers a day. "${file.name}" is ${fmtBytes(file.size)} on its own.`, 'err');
+      return;
+    }
+    let claim;
+    try {
+      claim = await api.post('/files/reserve', { bytes: file.size });
+    } catch {
+      toast('Could not reach the server to check your transfer allowance', 'err');
+      return;
+    }
+    applyQuota(claim);
+    if (!claim.ok) {
+      toast(`That would go over today's ${fmtBytes(fileQuota.budget)} relay allowance. ${fmtBytes(fileQuota.left)} left, "${file.name}" is ${fmtBytes(file.size)}. It resets tomorrow.`, 'err');
+      return;
+    }
+    // the session can drop while the reserve is in flight
+    if (!session.conn?.open) { refund(file.size); return; }
   }
+
   const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  upsert(fileId, { name: file.name, size: file.size, done: 0, dir: 'out', status: 'offered', file });
+  upsert(fileId, { name: file.name, size: file.size, done: 0, dir: 'out', status: 'offered', file, held: relayed ? file.size : 0 });
   send(session.conn, 'file-offer', { fileId, name: file.name, size: file.size, mime: file.type || 'application/octet-stream' });
+}
+
+// give the allowance back when a send never happened
+function release(fileId) {
+  const x = xfers.get(fileId);
+  if (!x?.held) return;
+  refund(x.held);
+  x.held = 0;
 }
 
 on('file-offer', (p) => {
@@ -130,15 +182,22 @@ on('file-accept', async (p) => {
   if (!x?.file) return;
   upsert(p.fileId, { status: 'active' });
   const conn = await dialTransfer(p.fileId).catch(() => null);
-  if (!conn) { upsert(p.fileId, { status: 'failed' }); toast('Could not open transfer channel', 'err'); return; }
+  if (!conn) {
+    release(p.fileId);
+    upsert(p.fileId, { status: 'failed' });
+    toast('Could not open transfer channel', 'err');
+    return;
+  }
   pump(conn, p.fileId, x.file).catch((e) => {
     console.error(e);
+    release(p.fileId);
     upsert(p.fileId, { status: 'failed' });
   });
 });
 
 on('file-decline', (p) => {
   if (!p?.fileId) return;
+  release(p.fileId);
   xfers.delete(p.fileId);
   renderList();
   toast('File declined');
@@ -181,7 +240,6 @@ async function pump(conn, fileId, file) {
   setTimeout(() => { try { conn.close(); } catch {} }, 1500);
 }
 
-// don't outrun the channel or the tab dies
 function drain(dc) {
   if (!dc || dc.bufferedAmount < HIGH_WATER) return Promise.resolve();
   return new Promise((resolve) => {
@@ -192,6 +250,19 @@ function drain(dc) {
 }
 
 let filesEl = null;
+
+function paintQuota() {
+  if (session.type !== 'relay') {
+    quotaEl.style.display = 'none';
+    return;
+  }
+  quotaEl.style.display = '';
+  quotaEl.textContent = fileQuota.known
+    ? (fileQuota.left <= 0
+        ? "You have used today's file transfer allowance. It resets tomorrow."
+        : `Relayed connection, ${fmtBytes(fileQuota.left)} of ${fmtBytes(fileQuota.budget)} left to send today`)
+    : 'Relayed connection, transfers are limited per day';
+}
 
 export function filesPanel() {
   if (filesEl) return filesEl;
@@ -217,13 +288,13 @@ export function filesPanel() {
 
   renderList();
 
+  if (session.type === 'relay' && !fileQuota.known) loadFileQuota();
+  paintQuota();
+
   filesEl = h('div', { style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } },
     drop,
     picker,
-    session.type === 'relay'
-      ? h('div', { class: 'relay-warn' },
-          `Relayed connection, files capped at ${fmtBytes(RELAY_CAP)}`)
-      : null,
+    quotaEl,
     h('div', { style: { flex: '1', overflowY: 'auto' } }, listEl)
   );
   return filesEl;

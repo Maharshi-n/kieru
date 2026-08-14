@@ -41,8 +41,7 @@ export async function getUser(id) {
   return rows[0] ?? null;
 }
 
-// email only. display names are not unique, so matching on one could add a
-// stranger who happens to share a name with the person you meant.
+// email only. names are not unique, and matching on one could add a stranger.
 export async function findUserByEmail(email) {
   const e = email.toLowerCase();
   if (usingMemory) {
@@ -88,7 +87,6 @@ export async function respondToRequest(friendshipId, userId, accept) {
     else mem.friendships.splice(i, 1);
     return true;
   }
-  // the addressee_id check is the auth — only the recipient can respond
   if (accept) {
     const r = await q(`UPDATE friendships SET status='accepted' WHERE id=? AND addressee_id=? AND status='pending'`, [
       friendshipId,
@@ -176,23 +174,17 @@ export const SHARE_BUDGET = 20;
 const utcDay = () => new Date().toISOString().slice(0, 10);
 
 export async function shareUsed(userId) {
-  if (usingMemory) {
-    const row = mem.quota.get(userId);
-    return row?.day === utcDay() ? row.seconds : 0;
-  }
+  if (usingMemory) return memRow(userId, utcDay()).seconds;
   const rows = await q(`SELECT seconds_used FROM share_quota WHERE user_id=? AND day=?`, [userId, utcDay()]);
   return rows[0] ? Number(rows[0].seconds_used) : 0;
 }
 
-// returns what the total is after adding, so the caller never has to read back
 export async function addShareSeconds(userId, seconds) {
   const day = utcDay();
   if (usingMemory) {
-    const row = mem.quota.get(userId);
-    const base = row?.day === day ? row.seconds : 0;
-    const total = Math.min(base + seconds, SHARE_BUDGET);
-    mem.quota.set(userId, { day, seconds: total });
-    return total;
+    const row = memRow(userId, day);
+    row.seconds = Math.min(row.seconds + seconds, SHARE_BUDGET);
+    return row.seconds;
   }
   await q(
     `INSERT INTO share_quota (user_id, day, seconds_used) VALUES (?,?,?)
@@ -200,4 +192,61 @@ export async function addShareSeconds(userId, seconds) {
     [userId, day, seconds, SHARE_BUDGET]
   );
   return shareUsed(userId);
+}
+
+// one relayed file allowance per day, spend it on as many files as you like
+export const FILE_BUDGET = 10 * 1024 * 1024;
+
+function memRow(userId, day) {
+  let row = mem.quota.get(userId);
+  if (!row || row.day !== day) {
+    row = { day, seconds: 0, bytes: 0 };
+    mem.quota.set(userId, row);
+  }
+  return row;
+}
+
+export async function fileBytesUsed(userId) {
+  if (usingMemory) return memRow(userId, utcDay()).bytes;
+  const rows = await q(`SELECT file_bytes_used FROM share_quota WHERE user_id=? AND day=?`, [userId, utcDay()]);
+  return rows[0] ? Number(rows[0].file_bytes_used) : 0;
+}
+
+// debits up front and says whether it fit. checking and then spending would let
+// two files started at once both pass a check they can't both afford.
+export async function reserveFileBytes(userId, bytes) {
+  const day = utcDay();
+  if (usingMemory) {
+    const row = memRow(userId, day);
+    if (row.bytes + bytes > FILE_BUDGET) return { ok: false, used: row.bytes };
+    row.bytes += bytes;
+    return { ok: true, used: row.bytes };
+  }
+  if (bytes > FILE_BUDGET) return { ok: false, used: await fileBytesUsed(userId) };
+
+  // make sure the row exists, then let the WHERE do the deciding. an
+  // ON DUPLICATE KEY IF() can't report whether it declined: affectedRows is 0
+  // both when the budget refused it and when the value simply didn't move.
+  await q(`INSERT IGNORE INTO share_quota (user_id, day) VALUES (?,?)`, [userId, day]);
+  const r = await q(
+    `UPDATE share_quota SET file_bytes_used = file_bytes_used + ?
+     WHERE user_id=? AND day=? AND file_bytes_used + ? <= ?`,
+    [bytes, userId, day, bytes, FILE_BUDGET]
+  );
+  const used = await fileBytesUsed(userId);
+  return { ok: r.affectedRows > 0, used };
+}
+
+export async function refundFileBytes(userId, bytes) {
+  const day = utcDay();
+  if (usingMemory) {
+    const row = memRow(userId, day);
+    row.bytes = Math.max(0, row.bytes - bytes);
+    return;
+  }
+  await q(
+    `UPDATE share_quota SET file_bytes_used = GREATEST(0, CAST(file_bytes_used AS SIGNED) - ?)
+     WHERE user_id=? AND day=?`,
+    [bytes, userId, day]
+  );
 }

@@ -94,8 +94,6 @@ function loadGoogle(clientId, target, onDone) {
     google.accounts.id.initialize({
       client_id: clientId,
       callback: async ({ credential }) => {
-        // swap the button for a spinner, the round trip is otherwise silent and
-        // the page looks frozen after you pick an account
         clear(target).append(busy);
         try {
           const { token, user } = await api.post('/auth/google', { credential });
@@ -123,8 +121,7 @@ const GSI_BUTTON = {
   width: 288,
 };
 
-// the friends list redraws every poll. keep the add-row alive across redraws or
-// it steals focus and wipes whatever is half-typed in it.
+// kept alive across redraws or the poll steals focus and wipes what's half-typed
 let addRow = null;
 let addInput = null;
 
@@ -223,7 +220,6 @@ function screenPanel() {
   const empty = h('div', { class: 'screen-empty' },
     sending ? 'Sharing your screen.' : 'Nothing shared yet.');
 
-  // screen share is the heaviest thing here, worth saying so before they start
   const relayWarn = relayed
     ? h('div', { class: 'relay-warn' },
         spent
@@ -256,8 +252,6 @@ export function workspaceView() {
 
   const mainSlot = h('div', { style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } });
   function rerenderMain() {
-    // detach rather than clear: these panels cache their dom and clearing would
-    // throw away the canvas and in-flight transfer rows
     mainSlot.replaceChildren(
       activeTab === 'board' ? boardPanel() : activeTab === 'files' ? filesPanel() : screenPanel()
     );
@@ -286,7 +280,6 @@ export function workspaceView() {
   return h('div', { class: 'ws' }, main, resizeGrip(side), side);
 }
 
-// drag the divider to resize the chat panel. width survives redraws.
 let sideWidth = 320;
 
 function resizeGrip(side) {

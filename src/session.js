@@ -122,7 +122,6 @@ function dial(peerId, timeout = 12000) {
     console.log('[session] dialing', peerId);
     const conn = getPeer().connect(peerId, { reliable: true });
 
-    // ice state is the only thing that tells us whether nat traversal worked
     const pc = () => conn.peerConnection;
     const probe = setInterval(() => {
       if (pc()) console.log('[session] ice:', pc().iceConnectionState, '| gathering:', pc().iceGatheringState);
