@@ -15,6 +15,10 @@ CLAUDE.md
 PLAN.md
 *.zip
 
+# local only
+server/store.test.js
+src/proto.test.mjs
+
 .DS_Store
 Thumbs.db
 .vscode/
