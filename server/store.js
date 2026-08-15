@@ -169,6 +169,68 @@ export async function clearPresence(userId) {
   await q(`DELETE FROM presence WHERE user_id=?`, [userId]);
 }
 
+export async function stats() {
+  if (usingMemory) {
+    const now = Date.now();
+    return {
+      users: mem.users.length,
+      online: [...mem.presence.values()].filter((p) => now - p.at < ONLINE_SECONDS * 1000).length,
+      friendships: mem.friendships.filter((f) => f.status === 'accepted').length,
+      pending: mem.friendships.filter((f) => f.status === 'pending').length,
+      new_today: 0,
+      new_week: 0,
+    };
+  }
+  const [[u], [p], [f]] = await Promise.all([
+    q(`SELECT COUNT(*) AS total,
+              SUM(created_at >= UTC_DATE()) AS today,
+              SUM(created_at >= UTC_DATE() - INTERVAL 7 DAY) AS week
+       FROM users`),
+    q(`SELECT COUNT(*) AS online FROM presence WHERE last_heartbeat > (NOW() - INTERVAL ? SECOND)`, [ONLINE_SECONDS]),
+    q(`SELECT SUM(status='accepted') AS accepted, SUM(status='pending') AS pending FROM friendships`),
+  ]);
+  return {
+    users: Number(u.total) || 0,
+    online: Number(p.online) || 0,
+    friendships: Number(f.accepted) || 0,
+    pending: Number(f.pending) || 0,
+    new_today: Number(u.today) || 0,
+    new_week: Number(u.week) || 0,
+  };
+}
+
+// everyone, newest first, with whoever is currently up flagged. no paging:
+// this is a two-person app, the table is small and it is mine to read.
+export async function allUsers() {
+  if (usingMemory) {
+    const now = Date.now();
+    return [...mem.users].reverse().map((u) => {
+      const p = mem.presence.get(u.id);
+      const online = !!p && now - p.at < ONLINE_SECONDS * 1000;
+      return {
+        display_name: u.display_name,
+        email: u.email,
+        created_at: null,
+        online,
+        seconds_ago: online ? Math.round((now - p.at) / 1000) : null,
+      };
+    });
+  }
+  const rows = await q(
+    `SELECT u.display_name, u.email, u.created_at,
+            (p.last_heartbeat > (NOW() - INTERVAL ? SECOND)) AS online,
+            TIMESTAMPDIFF(SECOND, p.last_heartbeat, NOW()) AS seconds_ago
+     FROM users u LEFT JOIN presence p ON p.user_id = u.id
+     ORDER BY u.created_at DESC`,
+    [ONLINE_SECONDS]
+  );
+  return rows.map((r) => ({
+    ...r,
+    online: !!Number(r.online),
+    seconds_ago: Number(r.online) ? Number(r.seconds_ago) : null,
+  }));
+}
+
 export const SHARE_BUDGET = 20;
 
 const utcDay = () => new Date().toISOString().slice(0, 10);

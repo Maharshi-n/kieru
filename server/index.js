@@ -248,6 +248,93 @@ function safeJson(s) {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
 
+// server rendered, not a view in the spa. a page in the bundle would ship its
+// own gate to every visitor and the password would be sitting in the js.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+function adminOk(req) {
+  const header = req.get('authorization') || '';
+  if (!header.startsWith('Basic ')) return false;
+  const [, pass = ''] = Buffer.from(header.slice(6), 'base64').toString().split(':');
+  const given = Buffer.from(pass);
+  const want = Buffer.from(ADMIN_PASSWORD);
+  return given.length === want.length && crypto.timingSafeEqual(given, want);
+}
+
+app.get('/admin', limit('admin', 20, 10 * 60 * 1000, true), wrap(async (req, res) => {
+  if (!ADMIN_PASSWORD) return res.status(503).type('text').send('admin disabled: set ADMIN_PASSWORD');
+  if (!adminOk(req)) {
+    res.set('www-authenticate', 'Basic realm="kieru admin", charset="UTF-8"');
+    return res.status(401).type('text').send('unauthorized');
+  }
+  const [s, users] = await Promise.all([store.stats(), store.allUsers()]);
+  res.set('cache-control', 'no-store').type('html').send(adminPage(s, users));
+}));
+
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const joined = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '-');
+
+function adminPage(s, users) {
+  const card = (label, value) => `<div class="c"><div class="l">${label}</div><div class="v">${value}</div></div>`;
+
+  const row = (u) => `<tr>
+    <td>${u.online ? '<b class="on">online</b>' : '<span class="off">offline</span>'}</td>
+    <td>${esc(u.display_name)}</td>
+    <td class="m">${esc(u.email) || '-'}</td>
+    <td class="m r">${u.online ? `${u.seconds_ago}s ago` : joined(u.created_at)}</td>
+  </tr>`;
+
+  const rows = users.length
+    ? users.map(row).join('')
+    : '<tr><td colspan="4" class="empty">nobody has signed up yet</td></tr>';
+
+  return `<!doctype html><meta charset="utf-8"><title>kieru admin</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<style>
+:root{--bg:#111113;--card:#1a1a1d;--bd:#26262a;--tx:#ececee;--sec:#9a9aa1;--mut:#77777e;--ok:#6faf7f}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 20px;background:var(--bg);color:var(--tx);
+  font:15px/1.5 "Instrument Sans",system-ui,sans-serif}
+main{max-width:860px;margin:0 auto}
+h1{font-size:19px;font-weight:600;margin:0}
+.sub{color:var(--mut);font-size:13px;margin:4px 0 24px}
+.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-bottom:28px}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px}
+.l{color:var(--sec);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.v{font:600 26px/1.2 "IBM Plex Mono",ui-monospace,monospace;margin-top:6px}
+h2{font-size:13px;font-weight:600;color:var(--sec);text-transform:uppercase;
+  letter-spacing:.04em;margin:0 0 10px}
+table{width:100%;border-collapse:collapse;background:var(--card);
+  border:1px solid var(--bd);border-radius:12px;overflow:hidden}
+td{padding:11px 14px;border-top:1px solid var(--bd)}
+tr:first-child td{border-top:0}
+.m{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:13px;color:var(--sec)}
+.r{text-align:right;white-space:nowrap}
+.on{color:var(--ok);font-weight:500}
+.off{color:var(--mut)}
+.empty{color:var(--mut);text-align:center}
+footer{color:var(--mut);font-size:12px;margin-top:22px}
+</style>
+<main>
+<h1>kieru admin</h1>
+<div class="sub">${store.usingMemory ? 'memory store (dev)' : 'mysql'} &middot; reloads every 15s</div>
+<div class="g">
+${card('Online now', `<span class="on">${s.online}</span>`)}
+${card('Registered', s.users)}
+${card('New today', s.new_today)}
+${card('New this week', s.new_week)}
+${card('Friendships', s.friendships)}
+${card('Pending', s.pending)}
+</div>
+<h2>Everyone (${users.length})</h2>
+<table>${rows}</table>
+<footer>${new Date().toISOString()}</footer>
+</main>
+<script>setTimeout(()=>location.reload(),15000)</script>`;
+}
+
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));

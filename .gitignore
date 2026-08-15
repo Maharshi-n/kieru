@@ -13,6 +13,7 @@ vite.log
 # local notes, not part of the app
 CLAUDE.md
 PLAN.md
+BLOG-NOTES.txt
 *.zip
 
 # local only
