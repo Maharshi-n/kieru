@@ -255,8 +255,9 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 function adminOk(req) {
   const header = req.get('authorization') || '';
   if (!header.startsWith('Basic ')) return false;
-  const [, pass = ''] = Buffer.from(header.slice(6), 'base64').toString().split(':');
-  const given = Buffer.from(pass);
+  // only the first colon separates the two, the password may contain more
+  const decoded = Buffer.from(header.slice(6), 'base64').toString();
+  const given = Buffer.from(decoded.slice(decoded.indexOf(':') + 1));
   const want = Buffer.from(ADMIN_PASSWORD);
   return given.length === want.length && crypto.timingSafeEqual(given, want);
 }
