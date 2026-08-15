@@ -261,12 +261,25 @@ function adminOk(req) {
   return given.length === want.length && crypto.timingSafeEqual(given, want);
 }
 
-app.get('/admin', limit('admin', 20, 10 * 60 * 1000, true), wrap(async (req, res) => {
+const guessLimit = limit('admin', 20, 10 * 60 * 1000, true);
+
+app.get('/admin', wrap(async (req, res) => {
   if (!ADMIN_PASSWORD) return res.status(503).type('text').send('admin disabled: set ADMIN_PASSWORD');
-  if (!adminOk(req)) {
+
+  // every browser sends the first request with no header just to be told the
+  // password box exists. rate limiting that locks me out of my own page.
+  if (!req.get('authorization')) {
     res.set('www-authenticate', 'Basic realm="kieru admin", charset="UTF-8"');
     return res.status(401).type('text').send('unauthorized');
   }
+
+  if (!adminOk(req)) {
+    return guessLimit(req, res, () => {
+      res.set('www-authenticate', 'Basic realm="kieru admin", charset="UTF-8"');
+      res.status(401).type('text').send('wrong password');
+    });
+  }
+
   const [s, users] = await Promise.all([store.stats(), store.allUsers()]);
   res.set('cache-control', 'no-store').type('html').send(adminPage(s, users));
 }));
